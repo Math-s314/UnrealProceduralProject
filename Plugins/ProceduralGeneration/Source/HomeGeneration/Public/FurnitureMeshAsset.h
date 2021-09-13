@@ -3,6 +3,7 @@
 #pragma once
 
 #include "FurnitureMeshInt.h"
+#include "HGBasicType.h"
 #include "CoreMinimal.h"
 #include "Engine/DataAsset.h"
 #include "FurnitureMeshAsset.generated.h"
@@ -90,6 +91,14 @@ struct FWallInteractionStruct
 	//Defines the interaction for the furniture's Y- side
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(DisplayName="Axe Y-"))
 	EWallAxeInteraction YDown;
+
+	//Return the first attracted wall that the function can find. Return false if it can't.
+	//Guarantees that at least one attracted wall exists.
+	bool GetFirstAttractedWall(EGenerationAxe &First) const;
+	
+	//Return the second attracted wall that the function can find (different from the first one returned by the other function). Return false if it can't.
+	//Guarantees that at least two attracted walls exist.
+	bool GetSecondAttractedWall(EGenerationAxe &Second) const;
 };
 
 /**
@@ -212,8 +221,7 @@ public:
 	UPROPERTY(EditAnyWhere, BlueprintReadWrite, meta=(EditCondition="bOverrideConstraint"))
 	FFurnitureConstraint ConstraintsOverride;
 	
-protected:
 	FVector BoundsOrigin;
 	FVector BoxExtent;
-	//TODO : Add 2D size (integer value)
+	FVectorGrid GridSize;
 };
