@@ -1,10 +1,15 @@
-﻿//Copyright
+//Copyright
 
+#include <assert.h>
 #include "HGInternalStruct.h"
-
 #include "HomeGenerator.h"
 
 #define CONSTRUCT_GRID(X,Y) check(X > 0 && Y > 0) Grid.SetNum(X); for (int i = 0; i < X; ++i) { Grid[i].SetNum(X); }
+
+FBasicBlock::FBasicBlock() : Level(0) {}
+
+FBasicBlock::FBasicBlock(const FVectorGrid& _Size, const FVectorGrid& _GlobalPosition, int _Level)
+	: Size(_Size), GlobalPosition(_GlobalPosition), Level(_Level) {}
 
 FRoomCell::FRoomCell() : Type(ERoomCellType::EMPTY), FurnitureDependencyMarker(0) {}
 
@@ -175,6 +180,14 @@ bool FRoomGrid::IsAlongYDownWall(const FFurnitureRect& Position) const
 	return Position.Position.Y == 0;
 }
 
+bool FRoomGrid::IsInAnyCorner(const FFurnitureRect& Position) const
+{
+	return IsAlongXDownWall(Position) && IsAlongYDownWall(Position)
+		|| IsAlongXUpWall(Position) && IsAlongYDownWall(Position)
+		|| IsAlongXUpWall(Position) && IsAlongYUpWall(Position)
+		|| IsAlongXDownWall(Position) && IsAlongYUpWall(Position);
+}
+
 bool FRoomGrid::CheckLimits(const FFurnitureRect& Position) const
 {
 	if(Position.Position.X < 0 || Position.Position.Y < 0)
@@ -271,6 +284,7 @@ void FRoomGrid::RotateDependencyData(const FFurnitureRect& InParentPosition, con
 				case EGenerationAxe::X_DOWN: RotatedDependency.Axe = EGenerationAxe::Y_DOWN; break;
 				case EGenerationAxe::Y_UP: RotatedDependency.Axe = EGenerationAxe::X_DOWN; break;
 				case EGenerationAxe::Y_DOWN: RotatedDependency.Axe = EGenerationAxe::X_UP; break;
+				default : assert(false);
 			}
 			break;
 			
@@ -283,6 +297,7 @@ void FRoomGrid::RotateDependencyData(const FFurnitureRect& InParentPosition, con
 				case EGenerationAxe::X_DOWN: RotatedDependency.Axe = EGenerationAxe::X_UP; break;
 				case EGenerationAxe::Y_UP: RotatedDependency.Axe = EGenerationAxe::Y_DOWN; break;
 				case EGenerationAxe::Y_DOWN: RotatedDependency.Axe = EGenerationAxe::Y_UP; break;
+				default : assert(false);
 			}
 			break;
 		
@@ -296,6 +311,7 @@ void FRoomGrid::RotateDependencyData(const FFurnitureRect& InParentPosition, con
 				case EGenerationAxe::X_DOWN: RotatedDependency.Axe = EGenerationAxe::Y_UP; break;
 				case EGenerationAxe::Y_UP: RotatedDependency.Axe = EGenerationAxe::X_UP; break;
 				case EGenerationAxe::Y_DOWN: RotatedDependency.Axe = EGenerationAxe::X_DOWN; break;
+				default: assert(false);
 			}
 			break;
 	}
@@ -426,12 +442,12 @@ bool FRoomGrid::CheckDependencyConstraints(const FFurnitureRect& RotatedPosition
 		return false;
 
 	switch (RotatedDependency.Position) {
-		case EDependencyPlace::EDGEL:
+		case EDependencyPlace::EDGE_L:
 			if(DVirtualLeft != 0)
 				return false;
 			break;
 		
-		case EDependencyPlace::EDGER:
+		case EDependencyPlace::EDGE_R:
 			if(DVirtualRight != 0)
 				return false;
 			break;
@@ -561,9 +577,13 @@ const FRoomBlock* FDoorBlock::ObtainOppositeParent(const FRoomBlock& Parent) con
 	return ParentMain;
 }
 
-FRoomBlock::FRoomBlock() : Level(0) {}
+UFurnitureMeshAsset* FDoorBlock::GetMeshAsset() const
+{
+	return DoorAsset;
+}
 
-FRoomBlock::FRoomBlock(const FVectorGrid& _Size, const FVectorGrid& _GlobalPosition, int _Level) : Size(_Size), GlobalPosition(_GlobalPosition), Level(_Level) {}
+FRoomBlock::FRoomBlock(const FVectorGrid& _Size, const FVectorGrid& _GlobalPosition, int _Level)
+	: FBasicBlock(_Size, _GlobalPosition, _Level) {}
 
 FVector FRoomBlock::GenerateRoomOffset(const FBuildingConstraint& BuildData) const
 {
@@ -573,3 +593,11 @@ FVector FRoomBlock::GenerateRoomOffset(const FBuildingConstraint& BuildData) con
 		Level * (BuildData.FloorHeight + BuildData.FloorWidth)
 	);
 }
+
+bool FRoomBlock::operator<(const FRoomBlock& B) const
+{
+	return FMath::Min(Size.X, Size.Y) < FMath::Min(B.Size.X, B.Size.Y);
+}
+
+FDependencyBuffer::FDependencyBuffer(const TArray<FFurnitureDependency>& _Dependencies,	const FFurnitureRect& _ParentPosition)
+	: Dependencies(_Dependencies), ParentPosition(_ParentPosition) {}

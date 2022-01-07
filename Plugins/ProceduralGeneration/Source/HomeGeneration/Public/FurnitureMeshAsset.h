@@ -2,23 +2,27 @@
 
 #pragma once
 
+#include "CoreMinimal.h"
 #include "FurnitureMeshInt.h"
 #include "HGBasicType.h"
-#include "CoreMinimal.h"
 #include "Engine/DataAsset.h"
 #include "FurnitureMeshAsset.generated.h"
 
 /**
  * Represents a side of a furniture or an element in the generation system (a room's side for example).
  * This information is based on the local axes of a mesh (for a furniture).
+ * Can be used in a mask storage.
  */
 UENUM(BlueprintType)
 enum class EGenerationAxe : uint8
 {
-	X_UP		UMETA(DisplayName="Axe X+"),
-	X_DOWN		UMETA(DisplayName="Axe X-"),
-	Y_UP		UMETA(DisplayName="Axe Y+"),
-	Y_DOWN		UMETA(DisplayName="Axe Y-")
+	//Shouldn't be used, only exists for compilation purposes
+	NONE = 0	UMETA(DisplayName="None"),
+	
+	X_UP   = 1	UMETA(DisplayName="Axe X+"),//0001
+	X_DOWN = 2	UMETA(DisplayName="Axe X-"),//0010
+	Y_UP   = 4	UMETA(DisplayName="Axe Y+"),//0100
+	Y_DOWN = 8	UMETA(DisplayName="Axe Y-") //1000
 };
 
 //Basic furniture's constraints
@@ -157,10 +161,10 @@ UENUM(BlueprintType)
 enum class EDependencyPlace : uint8
 {
 	//The dependency must be placed along the left edge of the axis (when this axis is at the top of the furniture after a rotation)
-	EDGEL		UMETA(DisplayName="Edge Left"),
+	EDGE_L		UMETA(DisplayName="Edge Left"),
 
 	//The dependency must be placed along the right edge of the axis (when this axis is at the top of the furniture after a rotation)
-	EDGER		UMETA(DisplayName="Edge Right"),
+	EDGE_R		UMETA(DisplayName="Edge Right"),
 
 	//The dependency must be placed in front of the given axis but not along the right neither the left edge of this axis.
 	DEFAULT		UMETA(DisplayName="Default")
@@ -220,7 +224,8 @@ public:
 	//Constraints which will override the default structure if bOverrideConstraint is set to true.
 	UPROPERTY(EditAnyWhere, BlueprintReadWrite, meta=(EditCondition="bOverrideConstraint"))
 	FFurnitureConstraint ConstraintsOverride;
-	
+
+	//TODO : Actually never calculated but say it works
 	FVector BoundsOrigin;
 	FVector BoxExtent;
 	FVectorGrid GridSize;

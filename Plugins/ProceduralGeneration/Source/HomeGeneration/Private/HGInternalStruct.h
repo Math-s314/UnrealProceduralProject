@@ -1,4 +1,4 @@
-﻿//Fill Copyright
+//Fill Copyright
 
 #pragma once
 
@@ -6,7 +6,21 @@
 #include "CoreMinimal.h"
 #include "FurnitureMeshAsset.h"
 
-extern struct FBuildingConstraint;
+//TODO : Think to a better organisation of the internal structs files (HGInternalStruct and HGBasicStruct)
+
+//Home generator serialised structures
+struct FBuildingConstraint;
+struct FWindow;
+
+struct FBasicBlock
+{
+	FBasicBlock();
+	FBasicBlock(const FVectorGrid &_Size, const FVectorGrid &_GlobalPosition, int _Level);
+
+	FVectorGrid Size;
+	FVectorGrid GlobalPosition;
+	int Level;//Starts at 0
+};
 
 //In degrees
 enum class EFurnitureRotation : uint8
@@ -76,6 +90,7 @@ struct FRoomGrid
 	bool IsAlongXDownWall(const FFurnitureRect &Position) const;
 	bool IsAlongYUpWall(const FFurnitureRect &Position) const;
 	bool IsAlongYDownWall(const FFurnitureRect &Position) const;
+	bool IsInAnyCorner(const FFurnitureRect &Position) const; //Other are useless
 
 	//Checks if a rect is inside the room
 	bool CheckLimits(const FFurnitureRect &Position) const;
@@ -140,21 +155,24 @@ struct FDoorBlock
 	//Indicates if the position of this door has been already correctly set.
 	bool IsPositionValid() const;
 
-	//Return true if the indicated room is a parent of the room
+	//Returns true if the indicated room is a parent of the room
 	bool IsRoomParent(const FRoomBlock &Parent) const;
 
 	//Only valid when the door has been placed, represent the door in itself (not its margin)
 	//That means that the given position could technically be an invalid position for a normal furniture.
 	FFurnitureRect GenerateLocalFurnitureRect(const FRoomBlock &Parent) const;
 
-	//Give the size of the margin of the room for the given room block.
+	//Gives the size of the margin of the room for the given room block.
 	FVectorGrid GenerateLocalMarginSize(const FRoomBlock &Parent, const FMarginStruct &DefaultDoorMargin) const;
 
-	//Return the wall of the given room in which the door must be placed.
+	//Returns the wall of the given room in which the door must be placed.
 	EGenerationAxe RoomWallAxe(const FRoomBlock &Parent) const;
 
-	//Return the other parent of this door (nullptr if it is a hall)
+	//Returns the other parent of this door (nullptr if it is a hall)
 	const FRoomBlock *ObtainOppositeParent(const FRoomBlock &Parent) const;
+
+	//Returns the mesh of this door
+	UFurnitureMeshAsset *GetMeshAsset() const;
 protected:
 	//Linked rooms
 	const FRoomBlock * const ParentMain;
@@ -169,16 +187,25 @@ protected:
 	UFurnitureMeshAsset * const DoorAsset;
 };
 
-struct FRoomBlock
+struct FRoomBlock : FBasicBlock
 {
-	FRoomBlock();
+	FRoomBlock() = default;
 	FRoomBlock(const FVectorGrid &_Size, const FVectorGrid &_GlobalPosition, int _Level);
 	
-	FVectorGrid Size;
-	FVectorGrid GlobalPosition;
-	int Level;//Starts at 0
-	
 	TArray<FDoorBlock *> ConnectedDoors;
+	FName RoomType;
 
 	FVector GenerateRoomOffset(const FBuildingConstraint &BuildData) const;
+
+	//Comparison by minimal side to allow sorting
+	bool operator<(const FRoomBlock &B) const;
+};
+
+struct FDependencyBuffer
+{
+	FDependencyBuffer(const TArray<FFurnitureDependency> &_Dependencies, const FFurnitureRect &_ParentPosition);
+	
+	const TArray<FFurnitureDependency> &Dependencies;
+	const FFurnitureRect ParentPosition;
+};
 };
