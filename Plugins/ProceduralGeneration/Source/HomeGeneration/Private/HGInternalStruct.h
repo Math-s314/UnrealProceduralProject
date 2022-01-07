@@ -1,4 +1,4 @@
-//Fill Copyright
+﻿//Fill Copyright
 
 #pragma once
 
@@ -10,6 +10,7 @@
 
 //Home generator serialised structures
 struct FBuildingConstraint;
+struct FRoomsDivisionConstraints;
 struct FWindow;
 
 struct FBasicBlock
@@ -208,4 +209,67 @@ struct FDependencyBuffer
 	const TArray<FFurnitureDependency> &Dependencies;
 	const FFurnitureRect ParentPosition;
 };
+
+/**
+ * Structures used to divide a level into rooms.
+ */
+
+struct LevelDivisionData
+{
+	//Total area occupied by the halls in the current level.
+	int HallTotalArea;
+
+	//Nothing else for instance...
+};
+
+struct FHallBlock : FBasicBlock
+{
+	FHallBlock()= default;
+	FHallBlock(const FVectorGrid &_Size, const FVectorGrid &_GlobalPosition, int _Level);
+
+	//Checks if the windows of this hall have been already placed
+	bool AreWindowSpawned();
+
+	//Choose, place and spawned the needed windows for this hall
+	void AddWindow();
+};
+
+struct FUnknownBlock : FBasicBlock
+{
+	FUnknownBlock();
+	FUnknownBlock(const FVectorGrid &_Size, const FVectorGrid &_GlobalPosition, int _Level, bool _AlongX);
+
+	enum class DivideMethod : uint8
+	{
+		ERROR,		//Default value which is returned if an error is detected.
+		NO_DIVIDE,	//The current block shouldn't be divided anymore (should be transformed into room).
+		SPLIT,		//The block must be divide using the split method (hall creation).
+		DIVISION	//The block must be divide using the division method (no hall creation).
+	};
+
+	//Check if it is possible to divide this block and using which method (minimal side's size,...)
+	//Partially random (for the block that could be divide or stopped, depending on the wanted size)
+	DivideMethod ShouldDivide(const FRoomsDivisionConstraints &DivisionCst) const;//TODO : Need constraints and stats about the current floor
+
+	//Try to split the current block : create a hall in between the two new blocks.
+	//The current block become on of the two new created and the other one is returned.
+	bool BlockSplit(const FRoomsDivisionConstraints& DivisionCst, FUnknownBlock &SecondResultedBlock, FHallBlock &ResultHall);
+
+	//Try to make a division into the current block : no hall is created.
+	//The current block become on of the two new created and the other one is returned.
+	bool BlockDivision(const FRoomsDivisionConstraints& DivisionCst, FUnknownBlock &SecondResultedBlock);
+
+	//Once this block is stopped by the system, it might be transformed to a room
+	void TransformToRoom(FRoomBlock &CreatedRoom) const;
+
+protected:
+	//Indicate along which axis we should divide (set by the previous block)
+	bool DivideAlongX;
+	
+	//Is set to true when the block results of a division and not a split (no hall created)
+	//It means the block can't no more be divided using a split method but only with a division
+	bool NoMoreSplit;
+
+	//Used to ensure that the user of the class call the right method (error = no decision)
+	mutable DivideMethod DivideDecision;
 };

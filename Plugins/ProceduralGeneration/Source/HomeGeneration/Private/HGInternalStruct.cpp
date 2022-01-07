@@ -1,4 +1,4 @@
-//Copyright
+﻿//Copyright
 
 #include <assert.h>
 #include "HGInternalStruct.h"
@@ -601,3 +601,171 @@ bool FRoomBlock::operator<(const FRoomBlock& B) const
 
 FDependencyBuffer::FDependencyBuffer(const TArray<FFurnitureDependency>& _Dependencies,	const FFurnitureRect& _ParentPosition)
 	: Dependencies(_Dependencies), ParentPosition(_ParentPosition) {}
+
+FHallBlock::FHallBlock(const FVectorGrid& _Size, const FVectorGrid& _GlobalPosition, int _Level)
+	: FBasicBlock(_Size, _GlobalPosition, _Level) {}
+
+FUnknownBlock::FUnknownBlock() : FBasicBlock(), DivideAlongX(true), NoMoreSplit(false), DivideDecision(DivideMethod::ERROR) {}
+
+FUnknownBlock::FUnknownBlock(const FVectorGrid& _Size, const FVectorGrid& _GlobalPosition, int _Level, bool _AlongX)
+	: FBasicBlock(_Size, _GlobalPosition, _Level), DivideAlongX(_AlongX), NoMoreSplit(false), DivideDecision(DivideMethod::ERROR) {}
+
+FUnknownBlock::DivideMethod FUnknownBlock::ShouldDivide(const FRoomsDivisionConstraints& DivisionCst) const
+{
+	//Basic checks
+	assert(GlobalPosition.X >= 0 && GlobalPosition.Y >= 0);
+	assert(Size.X > DivisionCst.ABSMinimalSide && Size.Y > DivisionCst.ABSMinimalSide);
+
+	if(DivideDecision != DivideMethod::ERROR)
+		return DivideDecision;
+
+	//Divide along the correct side
+	DivideDecision = DivideMethod::NO_DIVIDE;
+	if(DivideAlongX)
+	{
+		const bool ShouldStopSplit = Size.X < DivisionCst.StopSplitSide
+			|| DivisionCst.ABSMinimalSide * 2  > Size.X - DivisionCst.HallWidth
+			|| NoMoreSplit;
+		
+		if(DivisionCst.ABSMinimalSide * 2 > Size.X)
+			DivideDecision = DivideMethod::NO_DIVIDE;
+		else if(Size.X >= DivisionCst.SufficientSide)
+		{
+			if(ShouldStopSplit)
+				DivideDecision =  DivideMethod::DIVISION;
+			else
+				DivideDecision =  DivideMethod::SPLIT;
+		}		
+		else if(FMath::RandRange(0.f, 1.f) <= DivisionCst.OverDivideProba)
+		{
+			if(ShouldStopSplit)
+				DivideDecision =  DivideMethod::DIVISION;
+			else
+				DivideDecision =  DivideMethod::SPLIT;
+		}
+	}
+	else
+	{
+		const bool ShouldStopSplit = Size.Y < DivisionCst.StopSplitSide
+			|| DivisionCst.ABSMinimalSide * 2  > Size.Y - DivisionCst.HallWidth
+			|| NoMoreSplit;
+		
+		if(DivisionCst.ABSMinimalSide * 2 > Size.Y)
+			DivideDecision = DivideMethod::NO_DIVIDE;
+		else if(Size.Y >= DivisionCst.SufficientSide)
+		{
+			if(ShouldStopSplit)
+				DivideDecision = DivideMethod::DIVISION;
+			else
+				DivideDecision = DivideMethod::SPLIT;
+		}
+		else if(FMath::RandRange(0.f, 1.f) <= DivisionCst.OverDivideProba)
+		{
+			if(ShouldStopSplit)
+				DivideDecision = DivideMethod::DIVISION;
+			else
+				DivideDecision = DivideMethod::SPLIT;
+		}
+	}
+	return DivideDecision;
+}
+
+bool FUnknownBlock::BlockSplit(const FRoomsDivisionConstraints& DivisionCst, FUnknownBlock& SecondResultedBlock, FHallBlock& ResultHall)
+{
+	//Basic checks
+	if(DivideDecision != DivideMethod::SPLIT)
+		return false;
+
+	//Make split
+	if(DivideAlongX)
+	{
+		const int HallAxis = FMath::RandRange(DivisionCst.ABSMinimalSide, Size.X - DivisionCst.ABSMinimalSide - DivisionCst.HallWidth);
+
+		//Setup the hall
+		ResultHall.Size = FVectorGrid(DivisionCst.HallWidth, Size.Y);
+		ResultHall.GlobalPosition = GlobalPosition + FVectorGrid(HallAxis, 0);
+
+		//Setup the returned block (highest X location)
+		SecondResultedBlock.DivideAlongX = false;
+		SecondResultedBlock.Size = FVectorGrid(Size.X - (HallAxis + DivisionCst.HallWidth), Size.Y);
+		SecondResultedBlock.GlobalPosition = GlobalPosition + FVectorGrid(HallAxis + DivisionCst.HallWidth, 0);
+
+		//Setup this block
+		DivideAlongX = false;
+		Size = FVectorGrid(HallAxis, Size.Y);
+	}
+	else
+	{
+		const int HallAxis = FMath::RandRange(DivisionCst.ABSMinimalSide, Size.Y - DivisionCst.ABSMinimalSide - DivisionCst.HallWidth);
+
+		//Setup the hall
+		ResultHall.Size = FVectorGrid(Size.X, DivisionCst.HallWidth);
+		ResultHall.GlobalPosition = GlobalPosition + FVectorGrid(0, HallAxis);
+
+		//Setup the returned block (highest Y location)
+		SecondResultedBlock.DivideAlongX = true;
+		SecondResultedBlock.Size = FVectorGrid(Size.X, Size.Y - (HallAxis + DivisionCst.HallWidth));
+		SecondResultedBlock.GlobalPosition = GlobalPosition + FVectorGrid(0, HallAxis + DivisionCst.HallWidth);
+
+		//Setup this block
+		DivideAlongX = true;
+		Size = FVectorGrid(Size.X, HallAxis);
+	}
+
+	//Redundant affectations
+	SecondResultedBlock.DivideDecision = DivideDecision = DivideMethod::ERROR;
+	SecondResultedBlock.NoMoreSplit = NoMoreSplit = false;
+	SecondResultedBlock.Level = ResultHall.Level = Level;
+
+	return true;
+}
+
+bool FUnknownBlock::BlockDivision(const FRoomsDivisionConstraints& DivisionCst, FUnknownBlock& SecondResultedBlock)
+{
+	//Basic checks
+	if(DivideDecision != DivideMethod::DIVISION)
+		return false;
+
+	//Make split
+	if(DivideAlongX)
+	{
+		const int WallAxis = FMath::RandRange(DivisionCst.ABSMinimalSide, Size.X - DivisionCst.ABSMinimalSide);
+
+		//Setup the returned block (highest X location)
+		SecondResultedBlock.DivideAlongX = false;
+		SecondResultedBlock.Size = FVectorGrid(Size.X - WallAxis, Size.Y);
+		SecondResultedBlock.GlobalPosition = GlobalPosition + FVectorGrid(WallAxis, 0);
+
+		//Setup this block
+		DivideAlongX = false;
+		Size = FVectorGrid(WallAxis, Size.Y);
+	}
+	else
+	{
+		const int WallAxis = FMath::RandRange(DivisionCst.ABSMinimalSide, Size.Y - DivisionCst.ABSMinimalSide);
+
+		//Setup the returned block (highest X location)
+		SecondResultedBlock.DivideAlongX = true;
+		SecondResultedBlock.Size = FVectorGrid(Size.X, Size.Y - WallAxis);
+		SecondResultedBlock.GlobalPosition = GlobalPosition + FVectorGrid(0, WallAxis);
+
+		//Setup this block
+		DivideAlongX = true;
+		Size = FVectorGrid(Size.X, WallAxis);
+	}
+
+	//Redundant affectations
+	SecondResultedBlock.DivideDecision = DivideDecision = DivideMethod::ERROR;
+	SecondResultedBlock.NoMoreSplit = NoMoreSplit = true;
+	SecondResultedBlock.Level = Level;
+
+	return true;
+}
+
+void FUnknownBlock::TransformToRoom(FRoomBlock& CreatedRoom) const
+{
+	CreatedRoom.RoomType = "";
+	CreatedRoom.Level = Level;
+	CreatedRoom.Size = Size;
+	CreatedRoom.GlobalPosition = GlobalPosition;
+}

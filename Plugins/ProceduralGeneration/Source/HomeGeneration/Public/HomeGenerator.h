@@ -1,4 +1,4 @@
-// Fill out your copyright notice in the Description page of Project Settings.
+﻿// Fill out your copyright notice in the Description page of Project Settings.
 
 #pragma once
 
@@ -57,6 +57,63 @@ struct FBuildingConstraint
 protected://Generated data by the procedural generator
 
 };
+
+/**
+ * Groups all the information needed to control the behavior of the room division system.
+ * All the indicated constraints are applied per level, not globally.
+ */
+USTRUCT(BlueprintType)
+struct FRoomsDivisionConstraints
+{
+	GENERATED_BODY()
+	
+	FRoomsDivisionConstraints();
+
+	//Wanted width of a hall (corridor between rooms in a floor)
+	//In grid square
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	int HallWidth;
+
+	//Maximum ration of the surface occupied by the halls on the total area.
+	//In percent : ]0; 1[
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(DisplayName="MinimalSideCoefficient", ClampMin="0.0", ClampMax="1.0"))
+	float MaxHallRatio;
+
+	//Defines the absolute minimal side : any room can have a side under this.
+	//ABSMinSide = MinSideCoef * CalcMinimalSide
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(DisplayName="MinimalSideCoefficient", ClampMin="1.0"))
+	float MinSideCoef;
+
+	//Defines the stop split side : any room with a side under this can't be split, only divided
+	//StopSplitSide = StopSplitCoef * CalcMinimalSide
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(DisplayName="StopSplitCoefficient", ClampMin="1.0"))
+	float StopSplitCoef;
+
+	//Defines the sufficient side : any room with a side above this must be split or divided
+	//SufficientSide = SufficientChunkCoef * CalcMinimalSide
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(DisplayName="SufficientChunkCoefficient", ClampMin="2.0"))
+	float SufficientChunkCoef;
+
+	//When the side of a block is under the sufficient side, it gives us the probability to continue to divide.
+	//In percent : [0; 1]
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(DisplayName="OverDivideProbability", ClampMin="0.0", ClampMax="1.0"))
+	float OverDivideProba;
+	
+protected://Generated data by the procedural generator
+	//Calculated minimal side from the rooms information
+	int BasicMinimalSide;
+
+	//Absolute minimal side
+	int ABSMinimalSide;
+
+	//Side under which the split will be stopped
+	int StopSplitSide;
+
+	//Sufficient side
+	int SufficientSide;
+
+	friend class AHomeGenerator;
+	friend struct FUnknownBlock;
 };
 
 /**
@@ -179,7 +236,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	TMap<FName, FRoom> Rooms;
 
-	//TODO : Add advanced division parameters (hall %,...)
+	//TODO : Comment
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	FRoomsDivisionConstraints RoomsDivisionConstraints;
 
 	///______________________
 	///Furniture
@@ -243,6 +302,33 @@ protected:
 	///______________________
 	///Rooms step
 	///
+
+	virtual void DefineRooms();
+
+	//Defines the position of the stairs and the first halls (stairs must be connected to at least one hall)
+	//These position are used by all levels
+	virtual void StairsPositioning(TArray<FUnknownBlock> & InitialBlocks, TArray<FHallBlock> &InitialHalls);
+	
+	//TODO: When creating caller function, check the best way to pass the argument
+	//Divide given level into a list of room and halls
+	virtual void DivideSurface(int Level, const TArray<FUnknownBlock> &InitialBlocks, const TArray<FHallBlock> &InitialHalls);
+
+	//Called when all levels have been divided to define the type for each room block created.
+	//Acts globally on all levels simultaneously
+	virtual void AllocateSurface();
+
+	//TODO : Remove wall
+	//TODO : Add windows and decoration
+	virtual void CompleteHallSurface(); //31/12/2021 : No fucking idea how to do this shit
+
+	//All halls in the building by level (first index)
+	TArray<TArray<FHallBlock>> HallBlocks;
+
+	//All rooms in the building by level (first index)
+	TArray<TArray<FRoomBlock>> RoomBlocks;
+
+	//TODO : Missing step where we define the door furniture and connect the doors between each other
+	//TODO : Missing step where we generate the wall/floor
 	
 	///______________________
 	///Furniture Step
