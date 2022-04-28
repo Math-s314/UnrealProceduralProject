@@ -8,6 +8,8 @@
 #include "Engine/DataAsset.h"
 #include "FurnitureMeshAsset.generated.h"
 
+extern struct FFurniture;
+
 /**
  * Represents a side of a furniture or an element in the generation system (a room's side for example).
  * This information is based on the local axes of a mesh (for a furniture).
@@ -155,7 +157,7 @@ struct FFurnitureConstraint
 
 /**
  * Describes the way a dependency must be placed in front of a side of the parent furniture.
- * TODO : It isn't actually very permissive
+ * ENH : It isn't actually very permissive
  */
 UENUM(BlueprintType)
 enum class EDependencyPlace : uint8
@@ -224,6 +226,10 @@ public:
 	//Constraints which will override the default structure if bOverrideConstraint is set to true.
 	UPROPERTY(EditAnyWhere, BlueprintReadWrite, meta=(EditCondition="bOverrideConstraint"))
 	FFurnitureConstraint ConstraintsOverride;
+
+	//Calculates the area occupied by this furniture including margin (without any dependency)
+	//Doesn't store it because will be generally called once (for one furniture)
+	int GetArea(const FFurniture& CorrespondingFurniture) const;
 
 	//TODO : Actually never calculated but say it works
 	FVector BoundsOrigin;

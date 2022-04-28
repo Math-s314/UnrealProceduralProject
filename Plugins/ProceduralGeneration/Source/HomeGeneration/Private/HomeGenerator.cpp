@@ -5,13 +5,44 @@
 #include "Engine/StaticMeshActor.h"
 #include <assert.h>
 
-FRoomsDivisionConstraints::FRoomsDivisionConstraints()
-	: HallWidth(0), MaxHallRatio(0.4f), MinSideCoef(2.f), StopSplitCoef(2.f), SufficientChunkCoef(2.f), OverDivideProba(0.5f),
-	  BasicMinimalSide(0), ABSMinimalSide(0), StopSplitSide(0), SufficientSide(0) {}
+void FRoomsDivisionConstraints::CalculateAllSides(const int _BasicMinimalSide, const int _BasicAverageSide, const int _BasicMaximalSide)
+{
+	ABSMinimalSide = FMath::CeilToInt(MinSideCoef * _BasicMinimalSide);
+	StopSplitSide = FMath::CeilToInt(StopSplitCoef * _BasicAverageSide);
+	SufficientSide = FMath::CeilToInt(SufficientChunkCoef * _BasicMaximalSide);
+}
+
+int FRoom::CalculateMinimalSide(TMap<FName, FFurniture> &FurnitureMapping)
+{
+	int NeededArea = 0;
+	for(const auto FurnitureType : Furniture)
+	{
+		FFurniture &_Furniture = FurnitureMapping[FurnitureType];
+		NeededArea += _Furniture.GetAverageArea();
+	}
+	MinRoomSide = FMath::CeilToInt(FMath::Sqrt(NeededArea));
+
+	return MinRoomSide;
+}
 
 int FRoom::GetMinimalSide() const
 {
 	return MinRoomSide;
+}
+
+int FFurniture::GetAverageArea()
+{
+	if(AverageArea == 0) //If not already calculated, calculate it
+	{
+		int Sum = 0;
+		for(const UFurnitureMeshAsset * const MeshObj : Mesh)
+			Sum += MeshObj->GetArea(*this);
+
+		// ENH: Floor/Ceil is important there ?
+		AverageArea =  Sum / Mesh.Num();
+	}
+
+	return AverageArea;
 }
 
 // Sets default values
@@ -28,6 +59,38 @@ void AHomeGenerator::BeginPlay()
 	
 }
 
+void AHomeGenerator::ComputeSides()
+{
+	int MinimalSide = INT_MAX;
+	int MaximalSide = 0;
+	int AverageSide = 0;
+	BuildingConstraints.NormalRoomQuantity = 0;
+	
+	for(auto Room : Rooms)
+	{
+		const int Quantity = FMath::CeilToInt(Room.Value.NumPerHab * Inhabitants);
+		BuildingConstraints.NormalRoomQuantity += Quantity;
+		
+		if(Room.Value.CalculateMinimalSide(Furniture) > 0 && Quantity > 0)
+		{
+			if(Room.Value.GetMinimalSide() < MinimalSide)
+				MinimalSide = Room.Value.GetMinimalSide();
+			if(Room.Value.GetMinimalSide() > MaximalSide)
+				MaximalSide = Room.Value.GetMinimalSide();
+			
+			AverageSide += Quantity * Room.Value.GetMinimalSide();
+		}
+	}
+	
+	AverageSide /= BuildingConstraints.NormalRoomQuantity;
+	RoomsDivisionConstraints.CalculateAllSides(MinimalSide, AverageSide, MaximalSide);
+	BuildingConstraints.AverageSide = AverageSide;
+
+	//Croissant order
+	auto PredicateRooms = [&] (const FRoom &A, const FRoom &B) { return A.GetMinimalSide() < B.GetMinimalSide(); };
+	Rooms.ValueSort(PredicateRooms);
+}
+
 void AHomeGenerator::GenerateRangeArray(TArray<int32>& InArray, int32 Start, int32 Stop)
 {
 	InArray.Empty();
@@ -41,26 +104,85 @@ void AHomeGenerator::GenerateRangeArray(TArray<int32>& InArray, int32 Stop)
 	GenerateRangeArray(InArray, 0, Stop);
 }
 
+void AHomeGenerator::DefineBuilding()
+{
+	//
+	//Chooses for each special furniture a mesh
+	check(Doors.Mesh.Num() > 0 && Stairs.Mesh.Num() > 0 && Windows.Mesh.Num() > 0)
+	SelectedDoor = Doors.Mesh[FMath::RandRange(0, Doors.Mesh.Num() - 1)];
+	SelectedStair = Stairs.Mesh[FMath::RandRange(0, Stairs.Mesh.Num() - 1)];
+	SelectedWindow = Windows.Mesh[FMath::RandRange(0, Windows.Mesh.Num() - 1)];
+
+	//
+	//Calculates building's dimensions
+	
+	//Basic steps
+	const int MinimalSideMin = FMath::Max(BuildingConstraints.MinSideFloorLength, RoomsDivisionConstraints.ABSMinimalSide + SelectedStair->GridSize.MinSide());
+	const int MinimalSideMax = FMath::Max(BuildingConstraints.MinSideFloorLength, RoomsDivisionConstraints.ABSMinimalSide + FMath::Max(RoomsDivisionConstraints.ABSMinimalSide + RoomsDivisionConstraints.HallWidth, SelectedStair->GridSize.MaxSide()));
+	
+	const int AreaPerStage = FMath::RandRange(
+		FMath::Max(MinimalSideMin * MinimalSideMax,FMath::CeilToInt(SelectedStair->GetArea(Stairs) / (1 - RoomsDivisionConstraints.MaxHallRatio))),
+		FMath::Max(MinimalSideMin * MinimalSideMax, FMath::Square(BuildingConstraints.MaxSideFloorLength)) //ENH:What should we do if set to 0
+	);
+	const float Intermediate = static_cast<float>(AreaPerStage) * (1 - RoomsDivisionConstraints.MaxHallRatio) - static_cast<float>(SelectedStair->GetArea(Stairs));
+
+	//Level's calculation
+	const int LevelMin = FMath::CeilToInt(BuildingConstraints.NormalRoomQuantity * FMath::Square<float>(FMath::Max<int>(
+		BuildingConstraints.AverageSide,
+		RoomsDivisionConstraints.ABSMinimalSide
+	)) / Intermediate);
+	const int LevelMax = FMath::Max(LevelMin,
+		FMath::Min(
+			FMath::CeilToInt((BuildingConstraints.NormalRoomQuantity + Rooms.Num()) * FMath::Square<float>(RoomsDivisionConstraints.SufficientSide) / Intermediate),
+			BuildingConstraints.MaxFloorsNumber > 0 ? BuildingConstraints.MaxFloorsNumber : INT_MAX
+		)
+	);
+	BuildingConstraints.Levels = FMath::RandRange(LevelMin, LevelMax);
+
+	//Building size calculation
+	if(FMath::RandBool()) //X side -> min side
+	{
+		BuildingConstraints.BuildingSize.X = FMath::RandRange(MinimalSideMin, AreaPerStage / MinimalSideMax);
+		BuildingConstraints.BuildingSize.Y = FMath::CeilToInt(AreaPerStage / BuildingConstraints.BuildingSize.X);
+	}
+	else
+	{
+		BuildingConstraints.BuildingSize.Y = FMath::RandRange(MinimalSideMin, AreaPerStage / MinimalSideMax);
+		BuildingConstraints.BuildingSize.X = FMath::CeilToInt(AreaPerStage / BuildingConstraints.BuildingSize.Y);
+	}	
+
+	//
+	//Positions the main door and prepare the division for the first floor (the only affected by this door)
+	//ENH : We will see that later actually the enter will be a hole
+}
+
 void AHomeGenerator::DefineRooms()
 {
-	TArray<FHallBlock> InitialHalls;
-	TArray<FUnknownBlock> InitialBlocks;
-	StairsPositioning(InitialBlocks, InitialHalls);
-
-	for (int i = 0; i < Levels; ++i)
+	FLevelOrganisation InitialOrganisation; //Stores initial B/H on the heap
+	TArray<FLevelOrganisation> LevelsOrganisation;
+	TDoubleLinkedList<FUnknownBlock> NodesToDelete;
+	
+	StairsPositioning(InitialOrganisation);
+	LevelsOrganisation.Init(InitialOrganisation, BuildingConstraints.Levels);
+	
+	for (int i = 0; i < BuildingConstraints.Levels; ++i)
 	{
 		HallBlocks.Push(TArray<FHallBlock>());
 		RoomBlocks.Push(TArray<FRoomBlock>());
-		DivideSurface(i, InitialBlocks, InitialHalls);
+		DivideSurface(i, LevelsOrganisation[i], NodesToDelete);
 	}
+	InitialOrganisation.Empty();//InitialOrganisation isn't valid anymore
 
+	ComputeWallEffect(LevelsOrganisation);
+	NodesToDelete.Empty();//All level organisations aren't valid anymore
+	
 	AllocateSurface();
 	CompleteHallSurface();
 }
 
-void AHomeGenerator::StairsPositioning(TArray<FUnknownBlock> &InitialBlocks, TArray<FHallBlock> &InitialHalls)
+void AHomeGenerator::StairsPositioning(FLevelOrganisation &InitialOrganisation)
 {
-	FRoomGrid LevelGrid(BuildingSize);
+	FRoomGrid LevelGrid(BuildingConstraints.BuildingSize);
 	
 	//Possible positions
 	TArray<int> PositionX;
@@ -68,6 +190,11 @@ void AHomeGenerator::StairsPositioning(TArray<FUnknownBlock> &InitialBlocks, TAr
 	TArray<EFurnitureRotation> Rotations = {EFurnitureRotation::ROT0, EFurnitureRotation::ROT90, EFurnitureRotation::ROT180, EFurnitureRotation::ROT270};
 	GenerateRangeArray(PositionX, LevelGrid.GetSizeX());
 	GenerateRangeArray(PositionY, LevelGrid.GetSizeY());
+
+	//Shuffle everything here to allow more random generation
+	ShuffleArray(PositionX);
+	ShuffleArray(PositionY);
+	ShuffleArray(Rotations);
 
 	//Define needed general element for positioning verification
 	const FFurnitureConstraint &FinalConstraints = SelectedStair->bOverrideConstraint ? SelectedStair->ConstraintsOverride : Stairs.DefaultConstraints;
@@ -87,12 +214,10 @@ void AHomeGenerator::StairsPositioning(TArray<FUnknownBlock> &InitialBlocks, TAr
 		{
 			for(const auto Rotation : Rotations)
 			{
-				
 				FFurnitureRect FinalRect(Rotation, FVectorGrid(X, Y), SelectedStair->GridSize);
 
 				//Reset if previous operation failed
-				InitialBlocks.Empty();
-				InitialHalls.Empty();
+				InitialOrganisation.Empty();
 
 				//Checks if the rect respects stairs constraints
 				bool IsStairPlaceable = true;
@@ -106,7 +231,13 @@ void AHomeGenerator::StairsPositioning(TArray<FUnknownBlock> &InitialBlocks, TAr
 					const auto IsNHXCenterAvailable = [&] () -> bool { return IsNHCenterAvailable(LevelGrid.GetSizeX(), RotatedSize.X); };
 					const auto IsNHYCenterAvailable = [&] () -> bool  { return IsNHCenterAvailable( LevelGrid.GetSizeY(), RotatedSize.Y); };
 
-					//TODO : The code in the center case could replace all other cases (just if we check X > 0 for all X calculated value)
+					InitialOrganisation.SetHallBlock(FLevelOrganisation::Stairs, new FHallBlock(
+						RotatedSize,
+						FinalRect.Position,
+						0
+					));
+
+					//ENH : The code in the center case could replace all other cases (just if we check X > 0 for all X calculated value)					
 					//We could so split the part check if possible and spawn the hall/blocks
 					//Case where it is in center of the room
 					if(IsInXCenter() && IsInYCenter())
@@ -121,58 +252,74 @@ void AHomeGenerator::StairsPositioning(TArray<FUnknownBlock> &InitialBlocks, TAr
 							const int FHSpace = FinalRect.Position.X - (FHAxis + RoomsDivisionConstraints.HallWidth); //No need of min or max, because it is already implied by the def of the axis value
 							const int SHSpace = SHAxis - (FinalRect.Position.X + RotatedSize.X);
 
-							InitialHalls.Push(FHallBlock(
-								FVectorGrid(RoomsDivisionConstraints.HallWidth, LevelGrid.GetSizeY()),
-								FVectorGrid(FHAxis, 0),
-								0
+							InitialOrganisation.SetHallBlock(
+								FLevelOrganisation::LowCorridor,
+								new FHallBlock(
+									FVectorGrid(RoomsDivisionConstraints.HallWidth, LevelGrid.GetSizeY()),
+									FVectorGrid(FHAxis, 0),
+									0
 							));
 
-							InitialHalls.Push(FHallBlock(
-								FVectorGrid(RoomsDivisionConstraints.HallWidth, LevelGrid.GetSizeY()),
-								FVectorGrid(SHAxis, 0),
-								0
+							InitialOrganisation.SetHallBlock(
+								FLevelOrganisation::HighCorridor,
+								new FHallBlock(
+									FVectorGrid(RoomsDivisionConstraints.HallWidth, LevelGrid.GetSizeY()),
+									FVectorGrid(SHAxis, 0),
+									0
 							));
 
 							if(FHSpace > 0)
-								InitialHalls.Push(FHallBlock(
-									FVectorGrid(FHSpace, RotatedSize.Y),
-									FVectorGrid(FHAxis + RoomsDivisionConstraints.HallWidth, FinalRect.Position.Y),
-									0
+								InitialOrganisation.SetHallBlock(
+									FLevelOrganisation::LowMargin,
+									new FHallBlock(
+										FVectorGrid(FHSpace, RotatedSize.Y),
+										FVectorGrid(FHAxis + RoomsDivisionConstraints.HallWidth, FinalRect.Position.Y),
+										0
 								));
 
 							if(SHSpace > 0)
-								InitialHalls.Push(FHallBlock(
-									FVectorGrid(SHSpace, RotatedSize.Y),
-									FVectorGrid(FinalRect.Position.X + RotatedSize.X, FinalRect.Position.Y),
-									0
+								InitialOrganisation.SetHallBlock(
+									FLevelOrganisation::HighMargin,
+									new FHallBlock(
+										FVectorGrid(SHSpace, RotatedSize.Y),
+										FVectorGrid(FinalRect.Position.X + RotatedSize.X, FinalRect.Position.Y),
+										0
 								));
 
-							InitialBlocks.Push(FUnknownBlock(
-								FVectorGrid(FHAxis, LevelGrid.GetSizeY()),
-								FVectorGrid(0, 0),
-								0,
-								false
+							InitialOrganisation.SetUnknownBlock(
+								FLevelOrganisation::LowWing,
+								new FUnknownBlock(
+									FVectorGrid(FHAxis, LevelGrid.GetSizeY()),
+									FVectorGrid(0, 0),
+									0,
+									false
 							));
 
-							InitialBlocks.Push(FUnknownBlock(
+							InitialOrganisation.SetUnknownBlock(
+								FLevelOrganisation::HighWing,
+								new FUnknownBlock(
 								FVectorGrid(LevelGrid.GetSizeX() - (SHAxis + RoomsDivisionConstraints.HallWidth), LevelGrid.GetSizeY()),
 								FVectorGrid(SHAxis + RoomsDivisionConstraints.HallWidth, 0),
 								0,
 								false
 							));
 
-							InitialBlocks.Push(FUnknownBlock(
-								FVectorGrid(SHAxis - (FHAxis + RoomsDivisionConstraints.HallWidth), FinalRect.Position.Y),
-								FVectorGrid(SHAxis + RoomsDivisionConstraints.HallWidth, 0),
-								0,
-								false
+							InitialOrganisation.SetUnknownBlock(
+								FLevelOrganisation::LowApartment,
+								new FUnknownBlock(
+									FVectorGrid(SHAxis - (FHAxis + RoomsDivisionConstraints.HallWidth), FinalRect.Position.Y),
+									FVectorGrid(SHAxis + RoomsDivisionConstraints.HallWidth, 0),
+									0,
+									false
 							));
 
-							InitialBlocks.Push(FUnknownBlock(
-								FVectorGrid(SHAxis - (FHAxis + RoomsDivisionConstraints.HallWidth), LevelGrid.GetSizeY() - (FinalRect.Position.Y + RotatedSize.Y)),
-								FVectorGrid(FHAxis + RoomsDivisionConstraints.HallWidth, FinalRect.Position.Y + RotatedSize.Y),
-								0,
-								false
+							InitialOrganisation.SetUnknownBlock(
+								FLevelOrganisation::HighApartment,
+								new FUnknownBlock(
+									FVectorGrid(SHAxis - (FHAxis + RoomsDivisionConstraints.HallWidth), LevelGrid.GetSizeY() - (FinalRect.Position.Y + RotatedSize.Y)),
+									FVectorGrid(FHAxis + RoomsDivisionConstraints.HallWidth, FinalRect.Position.Y + RotatedSize.Y),
+									0,
+									false
 							));
 						}
 						else
@@ -185,58 +332,74 @@ void AHomeGenerator::StairsPositioning(TArray<FUnknownBlock> &InitialBlocks, TAr
 							const int FHSpace = FinalRect.Position.Y - (FHAxis + RoomsDivisionConstraints.HallWidth); //No need of min or max, because it is already implied by the def of the axis value
 							const int SHSpace = SHAxis - (FinalRect.Position.Y + RotatedSize.Y);
 
-							InitialHalls.Push(FHallBlock(
-								FVectorGrid(LevelGrid.GetSizeX(), RoomsDivisionConstraints.HallWidth),
-								FVectorGrid(0, FHAxis),
-								0
+							InitialOrganisation.SetHallBlock(
+								FLevelOrganisation::LowCorridor,
+								new FHallBlock(
+									FVectorGrid(LevelGrid.GetSizeX(), RoomsDivisionConstraints.HallWidth),
+									FVectorGrid(0, FHAxis),
+									0
 							));
 
-							InitialHalls.Push(FHallBlock(
-								FVectorGrid(LevelGrid.GetSizeX(), RoomsDivisionConstraints.HallWidth),
-								FVectorGrid(0, SHAxis),
-								0
+							InitialOrganisation.SetHallBlock(
+								FLevelOrganisation::HighCorridor,
+								new FHallBlock(
+									FVectorGrid(LevelGrid.GetSizeX(), RoomsDivisionConstraints.HallWidth),
+									FVectorGrid(0, SHAxis),
+									0
 							));
 
 							if(FHSpace > 0)
-								InitialHalls.Push(FHallBlock(
-									FVectorGrid(RotatedSize.X, FHSpace),
-									FVectorGrid(FinalRect.Position.X, FHAxis + RoomsDivisionConstraints.HallWidth),
-									0
+								InitialOrganisation.SetHallBlock(
+								FLevelOrganisation::LowMargin,
+									new FHallBlock(
+										FVectorGrid(RotatedSize.X, FHSpace),
+										FVectorGrid(FinalRect.Position.X, FHAxis + RoomsDivisionConstraints.HallWidth),
+										0
 								));
 
 							if(SHSpace > 0)
-								InitialHalls.Push(FHallBlock(
-									FVectorGrid(RotatedSize.X, SHSpace),
-									FVectorGrid(FinalRect.Position.X, FinalRect.Position.Y + RotatedSize.Y),
-									0
+								InitialOrganisation.SetHallBlock(
+								FLevelOrganisation::HighMargin,
+									new FHallBlock(
+										FVectorGrid(RotatedSize.X, SHSpace),
+										FVectorGrid(FinalRect.Position.X, FinalRect.Position.Y + RotatedSize.Y),
+										0
 								));
 
-							InitialBlocks.Push(FUnknownBlock(
-								FVectorGrid(LevelGrid.GetSizeX(), FHAxis),
-								FVectorGrid(0, 0),
-								0,
-								true
+							InitialOrganisation.SetUnknownBlock(
+							FLevelOrganisation::LowWing,
+								new FUnknownBlock(
+									FVectorGrid(LevelGrid.GetSizeX(), FHAxis),
+									FVectorGrid(0, 0),
+									0,
+									true
 							));
 
-							InitialBlocks.Push(FUnknownBlock(
-								FVectorGrid(LevelGrid.GetSizeX(), LevelGrid.GetSizeY() - (SHAxis + RoomsDivisionConstraints.HallWidth)),
-								FVectorGrid(0, SHAxis + RoomsDivisionConstraints.HallWidth),
-								0,
-								true
+							InitialOrganisation.SetUnknownBlock(
+								FLevelOrganisation::HighWing,
+								new FUnknownBlock(
+									FVectorGrid(LevelGrid.GetSizeX(), LevelGrid.GetSizeY() - (SHAxis + RoomsDivisionConstraints.HallWidth)),
+									FVectorGrid(0, SHAxis + RoomsDivisionConstraints.HallWidth),
+									0,
+									true
 							));
 
-							InitialBlocks.Push(FUnknownBlock(
-								FVectorGrid(FinalRect.Position.X, SHAxis - (FHAxis + RoomsDivisionConstraints.HallWidth)),
-								FVectorGrid(0, SHAxis + RoomsDivisionConstraints.HallWidth),
-								0,
-								true
+							InitialOrganisation.SetUnknownBlock(
+								FLevelOrganisation::LowApartment,
+								new FUnknownBlock(
+									FVectorGrid(FinalRect.Position.X, SHAxis - (FHAxis + RoomsDivisionConstraints.HallWidth)),
+									FVectorGrid(0, SHAxis + RoomsDivisionConstraints.HallWidth),
+									0,
+									true
 							));
 
-							InitialBlocks.Push(FUnknownBlock(
-								FVectorGrid(LevelGrid.GetSizeX() - (FinalRect.Position.X + RotatedSize.X), SHAxis - (FHAxis + RoomsDivisionConstraints.HallWidth)),
-								FVectorGrid(FinalRect.Position.X + RotatedSize.X, FHAxis + RoomsDivisionConstraints.HallWidth),
-								0,
-								true
+							InitialOrganisation.SetUnknownBlock(
+								FLevelOrganisation::HighApartment,
+								new FUnknownBlock(
+									FVectorGrid(LevelGrid.GetSizeX() - (FinalRect.Position.X + RotatedSize.X), SHAxis - (FHAxis + RoomsDivisionConstraints.HallWidth)),
+									FVectorGrid(FinalRect.Position.X + RotatedSize.X, FHAxis + RoomsDivisionConstraints.HallWidth),
+									0,
+									true
 							));
 						}
 					}
@@ -250,75 +413,95 @@ void AHomeGenerator::StairsPositioning(TArray<FUnknownBlock> &InitialBlocks, TAr
 						else if(LevelGrid.IsAlongXUpWall(FinalRect))
 						{
 							const int Space = FMath::Max(-RoomsDivisionConstraints.HallWidth, FinalRect.Position.X - LevelGrid.GetSizeX() + RoomsDivisionConstraints.ABSMinimalSide);
-							InitialHalls.Push(FHallBlock(
-								FVectorGrid(RoomsDivisionConstraints.HallWidth, LevelGrid.GetSizeY()),
-								FVectorGrid(FinalRect.Position.X  - Space - RoomsDivisionConstraints.HallWidth, 0),
-								0
+							InitialOrganisation.SetHallBlock(
+								FLevelOrganisation::LowCorridor,
+									new FHallBlock(
+										FVectorGrid(RoomsDivisionConstraints.HallWidth, LevelGrid.GetSizeY()),
+										FVectorGrid(FinalRect.Position.X  - Space - RoomsDivisionConstraints.HallWidth, 0),
+										0
 							));
 
 							if(Space > 0)
-								InitialHalls.Push(FHallBlock(
-									FVectorGrid(Space, RotatedSize.Y),
-									FVectorGrid(FinalRect.Position.X  - Space, FinalRect.Position.Y),
-									0
+								InitialOrganisation.SetHallBlock(
+									FLevelOrganisation::LowMargin,
+									new FHallBlock(
+										FVectorGrid(Space, RotatedSize.Y),
+										FVectorGrid(FinalRect.Position.X  - Space, FinalRect.Position.Y),
+										0
 								));
 
-							InitialBlocks.Push(FUnknownBlock(
-								FVectorGrid(FinalRect.Position.X  - Space - RoomsDivisionConstraints.HallWidth, LevelGrid.GetSizeY()),
-								FVectorGrid(0, 0),
-								0,
-								false
+							InitialOrganisation.SetUnknownBlock(
+								FLevelOrganisation::LowWing,
+								new FUnknownBlock(
+									FVectorGrid(FinalRect.Position.X  - Space - RoomsDivisionConstraints.HallWidth, LevelGrid.GetSizeY()),
+									FVectorGrid(0, 0),
+									0,
+									false
+							));
+							
+							InitialOrganisation.SetUnknownBlock(
+								FLevelOrganisation::LowApartment,
+								new FUnknownBlock(
+									FVectorGrid(RotatedSize.X  + Space, FinalRect.Position.Y),
+									FVectorGrid(FinalRect.Position.X  - Space, 0),
+									0,
+									false
 							));
 
-							InitialBlocks.Push(FUnknownBlock(
-								FVectorGrid(RotatedSize.X  + Space, FinalRect.Position.Y),
-								FVectorGrid(FinalRect.Position.X  - Space, 0),
-								0,
-								false
-							));
-
-							InitialBlocks.Push(FUnknownBlock(
-								FVectorGrid(RotatedSize.X  + Space, LevelGrid.GetSizeY() - (FinalRect.Position.Y + RotatedSize.Y)),
-								FVectorGrid(FinalRect.Position.X  - Space, FinalRect.Position.Y + RotatedSize.Y),
-								0,
-								false
+							InitialOrganisation.SetUnknownBlock(
+								FLevelOrganisation::HighApartment,
+								new FUnknownBlock(
+									FVectorGrid(RotatedSize.X  + Space, LevelGrid.GetSizeY() - (FinalRect.Position.Y + RotatedSize.Y)),
+									FVectorGrid(FinalRect.Position.X  - Space, FinalRect.Position.Y + RotatedSize.Y),
+									0,
+									false
 							));
 						}
 						else
 						{
 							const int Space = FMath::Max(-RoomsDivisionConstraints.HallWidth, RoomsDivisionConstraints.ABSMinimalSide - RotatedSize.X);
-							InitialHalls.Push(FHallBlock(
-								FVectorGrid(RoomsDivisionConstraints.HallWidth, LevelGrid.GetSizeY()),
-								FVectorGrid( RotatedSize.X + Space, 0),
-								0
+							InitialOrganisation.SetHallBlock(
+								FLevelOrganisation::HighCorridor,
+								new FHallBlock(
+									FVectorGrid(RoomsDivisionConstraints.HallWidth, LevelGrid.GetSizeY()),
+									FVectorGrid( RotatedSize.X + Space, 0),
+									0
 							));
 
 							if(Space > 0)
-								InitialHalls.Push(FHallBlock(
-									FVectorGrid(Space, RotatedSize.Y),
-									FVectorGrid(RotatedSize.X, FinalRect.Position.Y),
-									0
+								InitialOrganisation.SetHallBlock(
+									FLevelOrganisation::HighMargin,
+									new FHallBlock(
+										FVectorGrid(Space, RotatedSize.Y),
+										FVectorGrid(RotatedSize.X, FinalRect.Position.Y),
+										0
 								));
 
-							InitialBlocks.Push(FUnknownBlock(
-								FVectorGrid(LevelGrid.GetSizeX() - (RotatedSize.X + Space + RoomsDivisionConstraints.HallWidth), LevelGrid.GetSizeY()),
-								FVectorGrid(RotatedSize.X + Space + RoomsDivisionConstraints.HallWidth, 0),
-								0,
-								false
+							InitialOrganisation.SetUnknownBlock(
+								FLevelOrganisation::HighWing,
+								new FUnknownBlock(
+									FVectorGrid(LevelGrid.GetSizeX() - (RotatedSize.X + Space + RoomsDivisionConstraints.HallWidth), LevelGrid.GetSizeY()),
+									FVectorGrid(RotatedSize.X + Space + RoomsDivisionConstraints.HallWidth, 0),
+									0,
+									false
 							));
 
-							InitialBlocks.Push(FUnknownBlock(
-								FVectorGrid(RotatedSize.X  + Space, FinalRect.Position.X),
-								FVectorGrid(0, 0),
-								0,
-								false
+							InitialOrganisation.SetUnknownBlock(
+								FLevelOrganisation::LowApartment,
+								new FUnknownBlock(
+									FVectorGrid(RotatedSize.X  + Space, FinalRect.Position.X),
+									FVectorGrid(0, 0),
+									0,
+									false
 							));
 
-							InitialBlocks.Push(FUnknownBlock(
-								FVectorGrid(RotatedSize.X  + Space, LevelGrid.GetSizeY() - (FinalRect.Position.Y + RotatedSize.Y)),
-								FVectorGrid(0, FinalRect.Position.Y + RotatedSize.Y),
-								0,
-								false
+							InitialOrganisation.SetUnknownBlock(
+								FLevelOrganisation::HighApartment,
+								new FUnknownBlock(
+									FVectorGrid(RotatedSize.X  + Space, LevelGrid.GetSizeY() - (FinalRect.Position.Y + RotatedSize.Y)),
+									FVectorGrid(0, FinalRect.Position.Y + RotatedSize.Y),
+									0,
+									false
 							));
 						}
 					}
@@ -332,75 +515,95 @@ void AHomeGenerator::StairsPositioning(TArray<FUnknownBlock> &InitialBlocks, TAr
 						if(LevelGrid.IsAlongYUpWall(FinalRect))
 						{
 							const int Space = FMath::Max(-RoomsDivisionConstraints.HallWidth, FinalRect.Position.Y - LevelGrid.GetSizeY() + RoomsDivisionConstraints.ABSMinimalSide);
-							InitialHalls.Push(FHallBlock(
-								 FVectorGrid(LevelGrid.GetSizeX(), RoomsDivisionConstraints.HallWidth),
-								 FVectorGrid(0, FinalRect.Position.Y  - Space - RoomsDivisionConstraints.HallWidth),
-								 0
+							InitialOrganisation.SetHallBlock(
+								FLevelOrganisation::LowCorridor,
+								new FHallBlock(
+									 FVectorGrid(LevelGrid.GetSizeX(), RoomsDivisionConstraints.HallWidth),
+									 FVectorGrid(0, FinalRect.Position.Y  - Space - RoomsDivisionConstraints.HallWidth),
+									 0
 							 ));
 
 							if(Space > 0)
-						 		InitialHalls.Push(FHallBlock(
-									 FVectorGrid(RotatedSize.X, Space),
-									 FVectorGrid(FinalRect.Position.X, FinalRect.Position.Y  - Space),
-									 0
+						 		InitialOrganisation.SetHallBlock(
+								FLevelOrganisation::LowMargin,
+									new FHallBlock(
+										 FVectorGrid(RotatedSize.X, Space),
+										 FVectorGrid(FinalRect.Position.X, FinalRect.Position.Y  - Space),
+										 0
 								));
 
-							InitialBlocks.Push(FUnknownBlock(
-								FVectorGrid(LevelGrid.GetSizeX(), FinalRect.Position.Y  - Space - RoomsDivisionConstraints.HallWidth),
-								FVectorGrid(0, 0),
-								0,
-								true
+							InitialOrganisation.SetUnknownBlock(
+								FLevelOrganisation::LowWing,
+								new FUnknownBlock(
+									FVectorGrid(LevelGrid.GetSizeX(), FinalRect.Position.Y  - Space - RoomsDivisionConstraints.HallWidth),
+									FVectorGrid(0, 0),
+									0,
+									true
 							));
 
-							InitialBlocks.Push(FUnknownBlock(
-								FVectorGrid(FinalRect.Position.X, RotatedSize.Y  + Space),
-								FVectorGrid(0, FinalRect.Position.Y  - Space),
-								0,
-								true
+							InitialOrganisation.SetUnknownBlock(
+								FLevelOrganisation::LowApartment,
+								new FUnknownBlock(
+									FVectorGrid(FinalRect.Position.X, RotatedSize.Y  + Space),
+									FVectorGrid(0, FinalRect.Position.Y  - Space),
+									0,
+									true
 							));
 							
-							InitialBlocks.Push(FUnknownBlock(
-								FVectorGrid(LevelGrid.GetSizeX() - (FinalRect.Position.X + RotatedSize.X), RotatedSize.Y  + Space),
-								FVectorGrid(FinalRect.Position.X + RotatedSize.X, FinalRect.Position.Y  - Space),
-								0,
-								true
+							InitialOrganisation.SetUnknownBlock(
+								FLevelOrganisation::HighApartment,
+								new FUnknownBlock(
+									FVectorGrid(LevelGrid.GetSizeX() - (FinalRect.Position.X + RotatedSize.X), RotatedSize.Y  + Space),
+									FVectorGrid(FinalRect.Position.X + RotatedSize.X, FinalRect.Position.Y  - Space),
+									0,
+									true
 							));
 						}
 						else
 						{
 							const int Space = FMath::Max(-RoomsDivisionConstraints.HallWidth, RoomsDivisionConstraints.ABSMinimalSide - RotatedSize.Y);
-							InitialHalls.Push(FHallBlock(
-								FVectorGrid(LevelGrid.GetSizeX(), RoomsDivisionConstraints.HallWidth),
-								FVectorGrid(0, RotatedSize.Y + Space),
-								0
+							InitialOrganisation.SetHallBlock(
+								FLevelOrganisation::HighCorridor,
+								new FHallBlock(
+									FVectorGrid(LevelGrid.GetSizeX(), RoomsDivisionConstraints.HallWidth),
+									FVectorGrid(0, RotatedSize.Y + Space),
+									0
 							));
 
 							if(Space > 0)
-								InitialHalls.Push(FHallBlock(
-									FVectorGrid(RotatedSize.X, Space),
-									FVectorGrid(FinalRect.Position.X, RotatedSize.Y),
-									0
+								InitialOrganisation.SetHallBlock(
+									FLevelOrganisation::HighMargin,
+									new FHallBlock(
+										FVectorGrid(RotatedSize.X, Space),
+										FVectorGrid(FinalRect.Position.X, RotatedSize.Y),
+										0
 								));
 
-							InitialBlocks.Push(FUnknownBlock(
-								FVectorGrid(LevelGrid.GetSizeX(),LevelGrid.GetSizeY() - (RotatedSize.Y + Space + RoomsDivisionConstraints.HallWidth)),
-								FVectorGrid(0, RotatedSize.Y + Space + RoomsDivisionConstraints.HallWidth),
-								0,
-								true
+							InitialOrganisation.SetUnknownBlock(
+								FLevelOrganisation::HighWing,
+								new FUnknownBlock(
+									FVectorGrid(LevelGrid.GetSizeX(),LevelGrid.GetSizeY() - (RotatedSize.Y + Space + RoomsDivisionConstraints.HallWidth)),
+									FVectorGrid(0, RotatedSize.Y + Space + RoomsDivisionConstraints.HallWidth),
+									0,
+									true
 							));
 
-							InitialBlocks.Push(FUnknownBlock(
-								FVectorGrid(FinalRect.Position.X, RotatedSize.Y  + Space),
-								FVectorGrid(0, 0),
-								0,
-								true
+							InitialOrganisation.SetUnknownBlock(
+								FLevelOrganisation::LowApartment,
+								new FUnknownBlock(
+									FVectorGrid(FinalRect.Position.X, RotatedSize.Y  + Space),
+									FVectorGrid(0, 0),
+									0,
+									true
 							));
 
-							InitialBlocks.Push(FUnknownBlock(
-								FVectorGrid(LevelGrid.GetSizeX() - (FinalRect.Position.X + RotatedSize.X), RotatedSize.Y  + Space),
-								FVectorGrid(FinalRect.Position.X + RotatedSize.X, 0),
-								0,
-								true
+							InitialOrganisation.SetUnknownBlock(
+								FLevelOrganisation::HighApartment,
+								new FUnknownBlock(
+									FVectorGrid(LevelGrid.GetSizeX() - (FinalRect.Position.X + RotatedSize.X), RotatedSize.Y  + Space),
+									FVectorGrid(FinalRect.Position.X + RotatedSize.X, 0),
+									0,
+									true
 							));
 						}
 					}
@@ -413,68 +616,98 @@ void AHomeGenerator::StairsPositioning(TArray<FUnknownBlock> &InitialBlocks, TAr
 							if(LevelGrid.IsAlongXUpWall(FinalRect))
 							{
 								const int Space = FMath::Max(-RoomsDivisionConstraints.HallWidth, FinalRect.Position.X - LevelGrid.GetSizeX() + RoomsDivisionConstraints.ABSMinimalSide);
-								InitialHalls.Push(FHallBlock(
-									FVectorGrid(RoomsDivisionConstraints.HallWidth, LevelGrid.GetSizeY()),
-									FVectorGrid(FinalRect.Position.X  - Space - RoomsDivisionConstraints.HallWidth, 0),
-									0
+								InitialOrganisation.SetHallBlock(
+									FLevelOrganisation::LowCorridor,
+									new FHallBlock(
+										FVectorGrid(RoomsDivisionConstraints.HallWidth, LevelGrid.GetSizeY()),
+										FVectorGrid(FinalRect.Position.X  - Space - RoomsDivisionConstraints.HallWidth, 0),
+										0
 								));
 
 								if(Space > 0)
-									InitialHalls.Push(FHallBlock(
-										FVectorGrid(Space, RotatedSize.Y),
-										FVectorGrid(FinalRect.Position.X  - Space, FinalRect.Position.Y),
-										0
+									InitialOrganisation.SetHallBlock(
+										FLevelOrganisation::LowMargin,
+										new FHallBlock(
+											FVectorGrid(Space, RotatedSize.Y),
+											FVectorGrid(FinalRect.Position.X  - Space, FinalRect.Position.Y),
+											0
 									));
 
-								InitialBlocks.Push(FUnknownBlock(
-									FVectorGrid(FinalRect.Position.X  - Space - RoomsDivisionConstraints.HallWidth, LevelGrid.GetSizeY()),
-									FVectorGrid(0, 0),
-									0,
-									false
-								));
-
-								InitialBlocks.Push(FUnknownBlock(
-									FVectorGrid(RotatedSize.X  + Space, LevelGrid.GetSizeY() - RotatedSize.Y),
-									FVectorGrid(FinalRect.Position.X  - Space, 0),
-									0,
-									false
+								InitialOrganisation.SetUnknownBlock(
+									FLevelOrganisation::LowWing,
+									new FUnknownBlock(
+										FVectorGrid(FinalRect.Position.X  - Space - RoomsDivisionConstraints.HallWidth, LevelGrid.GetSizeY()),
+										FVectorGrid(0, 0),
+										0,
+										false
 								));
 
 								if(LevelGrid.IsAlongYDownWall(FinalRect))
-									InitialBlocks[1].GlobalPosition.Y = RotatedSize.Y;
+									InitialOrganisation.SetUnknownBlock(
+										FLevelOrganisation::HighApartment,
+										new FUnknownBlock(
+											FVectorGrid(RotatedSize.X  + Space, LevelGrid.GetSizeY() - RotatedSize.Y),
+											FVectorGrid(FinalRect.Position.X  - Space,  RotatedSize.Y),
+											0,
+											false
+									));
+								else
+									InitialOrganisation.SetUnknownBlock(
+										FLevelOrganisation::LowApartment,
+										new FUnknownBlock(
+											FVectorGrid(RotatedSize.X  + Space, LevelGrid.GetSizeY() - RotatedSize.Y),
+											FVectorGrid(FinalRect.Position.X  - Space, 0),
+											0,
+											false
+									));
 							}
 							else //Along XDown so Position.X = 0
 							{
 								const int Space = FMath::Max(-RoomsDivisionConstraints.HallWidth, RoomsDivisionConstraints.ABSMinimalSide - RotatedSize.X);
-								InitialHalls.Push(FHallBlock(
-									FVectorGrid(RoomsDivisionConstraints.HallWidth, LevelGrid.GetSizeY()),
-									FVectorGrid( RotatedSize.X + Space, 0),
-									0
+								InitialOrganisation.SetHallBlock(
+									FLevelOrganisation::HighCorridor,
+									new FHallBlock(
+										FVectorGrid(RoomsDivisionConstraints.HallWidth, LevelGrid.GetSizeY()),
+										FVectorGrid( RotatedSize.X + Space, 0),
+										0
 								));
 
 								if(Space > 0)
-									InitialHalls.Push(FHallBlock(
-										FVectorGrid(Space, RotatedSize.Y),
-										FVectorGrid(RotatedSize.X, FinalRect.Position.Y),
-										0
+									InitialOrganisation.SetHallBlock(
+										FLevelOrganisation::HighMargin,
+										new FHallBlock(
+											FVectorGrid(Space, RotatedSize.Y),
+											FVectorGrid(RotatedSize.X, FinalRect.Position.Y),
+											0
 									));
 
-								InitialBlocks.Push(FUnknownBlock(
-									FVectorGrid(LevelGrid.GetSizeX() - (RotatedSize.X + Space + RoomsDivisionConstraints.HallWidth), LevelGrid.GetSizeY()),
-									FVectorGrid(RotatedSize.X + Space + RoomsDivisionConstraints.HallWidth, 0),
-									0,
-									false
-								));
-
-								InitialBlocks.Push(FUnknownBlock(
-									FVectorGrid(RotatedSize.X  + Space, LevelGrid.GetSizeY() - RotatedSize.Y),
-									FVectorGrid(0, 0),
-									0,
-									false
+								InitialOrganisation.SetUnknownBlock(
+									FLevelOrganisation::HighWing,
+									new FUnknownBlock(
+										FVectorGrid(LevelGrid.GetSizeX() - (RotatedSize.X + Space + RoomsDivisionConstraints.HallWidth), LevelGrid.GetSizeY()),
+										FVectorGrid(RotatedSize.X + Space + RoomsDivisionConstraints.HallWidth, 0),
+										0,
+										false
 								));
 
 								if(LevelGrid.IsAlongYDownWall(FinalRect))
-									InitialBlocks[1].GlobalPosition.Y = RotatedSize.Y;
+									InitialOrganisation.SetUnknownBlock(
+										FLevelOrganisation::HighApartment,
+										new FUnknownBlock(
+											FVectorGrid(RotatedSize.X  + Space, LevelGrid.GetSizeY() - RotatedSize.Y),
+											FVectorGrid(0, RotatedSize.Y),
+											0,
+											false
+									));
+								else
+									InitialOrganisation.SetUnknownBlock(
+										FLevelOrganisation::LowApartment,
+										new FUnknownBlock(
+											FVectorGrid(RotatedSize.X  + Space, LevelGrid.GetSizeY() - RotatedSize.Y),
+											FVectorGrid(0, 0),
+											0,
+											false
+									));
 							}
 						}
 						else
@@ -482,68 +715,98 @@ void AHomeGenerator::StairsPositioning(TArray<FUnknownBlock> &InitialBlocks, TAr
 							if(LevelGrid.IsAlongYUpWall(FinalRect))
 							{
 								const int Space = FMath::Max(-RoomsDivisionConstraints.HallWidth, FinalRect.Position.Y - LevelGrid.GetSizeY() + RoomsDivisionConstraints.ABSMinimalSide);
-								InitialHalls.Push(FHallBlock(
-									FVectorGrid(LevelGrid.GetSizeX(), RoomsDivisionConstraints.HallWidth),
-									FVectorGrid(0, FinalRect.Position.Y  - Space - RoomsDivisionConstraints.HallWidth),
-									0
+								InitialOrganisation.SetHallBlock(
+									FLevelOrganisation::LowCorridor,
+									new FHallBlock(
+										FVectorGrid(LevelGrid.GetSizeX(), RoomsDivisionConstraints.HallWidth),
+										FVectorGrid(0, FinalRect.Position.Y  - Space - RoomsDivisionConstraints.HallWidth),
+										0
 								));
 
 								if(Space > 0)
-									InitialHalls.Push(FHallBlock(
-										FVectorGrid(RotatedSize.X, Space),
-										FVectorGrid(FinalRect.Position.X, FinalRect.Position.Y  - Space),
-										0
+									InitialOrganisation.SetHallBlock(
+										FLevelOrganisation::LowMargin,
+										new FHallBlock(
+											FVectorGrid(RotatedSize.X, Space),
+											FVectorGrid(FinalRect.Position.X, FinalRect.Position.Y  - Space),
+											0
 									));
 
-								InitialBlocks.Push(FUnknownBlock(
-									FVectorGrid(LevelGrid.GetSizeX(), FinalRect.Position.Y  - Space - RoomsDivisionConstraints.HallWidth),
-									FVectorGrid(0, 0),
-									0,
-									true
+								InitialOrganisation.SetUnknownBlock(
+									FLevelOrganisation::LowWing,
+									new FUnknownBlock(
+										FVectorGrid(LevelGrid.GetSizeX(), FinalRect.Position.Y  - Space - RoomsDivisionConstraints.HallWidth),
+										FVectorGrid(0, 0),
+										0,
+										true
 								));
-
-								InitialBlocks.Push(FUnknownBlock(
-									FVectorGrid(LevelGrid.GetSizeX() - RotatedSize.X, RotatedSize.Y  + Space),
-									FVectorGrid(0, FinalRect.Position.Y  - Space),
-									0,
-									true
-								));
-
+								
 								if(LevelGrid.IsAlongXDownWall(FinalRect))
-									InitialBlocks[1].GlobalPosition.X = RotatedSize.X;
+									InitialOrganisation.SetUnknownBlock(
+										FLevelOrganisation::HighApartment,
+										new FUnknownBlock(
+											FVectorGrid(LevelGrid.GetSizeX() - RotatedSize.X, RotatedSize.Y  + Space),
+											FVectorGrid(RotatedSize.X, FinalRect.Position.Y  - Space),
+											0,
+											true
+									));
+								else
+									InitialOrganisation.SetUnknownBlock(
+										FLevelOrganisation::LowApartment,
+										new FUnknownBlock(
+											FVectorGrid(LevelGrid.GetSizeX() - RotatedSize.X, RotatedSize.Y  + Space),
+											FVectorGrid(0, FinalRect.Position.Y  - Space),
+											0,
+											true
+									));
 							}
 							else
 							{
 								const int Space = FMath::Max(-RoomsDivisionConstraints.HallWidth, RoomsDivisionConstraints.ABSMinimalSide - RotatedSize.Y);
-								InitialHalls.Push(FHallBlock(
-									FVectorGrid(LevelGrid.GetSizeX(), RoomsDivisionConstraints.HallWidth),
-									FVectorGrid(0, RotatedSize.Y + Space),
-									0
+								InitialOrganisation.SetHallBlock(
+									FLevelOrganisation::HighCorridor,
+									new FHallBlock(
+										FVectorGrid(LevelGrid.GetSizeX(), RoomsDivisionConstraints.HallWidth),
+										FVectorGrid(0, RotatedSize.Y + Space),
+										0
 								));
 
 								if(Space > 0)
-									InitialHalls.Push(FHallBlock(
-										FVectorGrid(RotatedSize.X, Space),
-										FVectorGrid(FinalRect.Position.X, RotatedSize.Y),
-										0
+									InitialOrganisation.SetHallBlock(
+										FLevelOrganisation::HighMargin,
+										new FHallBlock(
+											FVectorGrid(RotatedSize.X, Space),
+											FVectorGrid(FinalRect.Position.X, RotatedSize.Y),
+											0
 									));
 
-								InitialBlocks.Push(FUnknownBlock(
-									FVectorGrid(LevelGrid.GetSizeX(),LevelGrid.GetSizeY() - (RotatedSize.Y + Space + RoomsDivisionConstraints.HallWidth)),
-									FVectorGrid(0, RotatedSize.Y + Space + RoomsDivisionConstraints.HallWidth),
-									0,
-									true
-								));
-
-								InitialBlocks.Push(FUnknownBlock(
-									FVectorGrid(LevelGrid.GetSizeX() - RotatedSize.X, RotatedSize.Y  + Space),
-									FVectorGrid(0, 0),
-									0,
-									true
+								InitialOrganisation.SetUnknownBlock(
+									FLevelOrganisation::HighWing,
+									new FUnknownBlock(
+										FVectorGrid(LevelGrid.GetSizeX(),LevelGrid.GetSizeY() - (RotatedSize.Y + Space + RoomsDivisionConstraints.HallWidth)),
+										FVectorGrid(0, RotatedSize.Y + Space + RoomsDivisionConstraints.HallWidth),
+										0,
+										true
 								));
 
 								if(LevelGrid.IsAlongXDownWall(FinalRect))
-									InitialBlocks[1].GlobalPosition.X = RotatedSize.X;
+									InitialOrganisation.SetUnknownBlock(
+										FLevelOrganisation::HighApartment,
+										new FUnknownBlock(
+											FVectorGrid(LevelGrid.GetSizeX() - RotatedSize.X, RotatedSize.Y  + Space),
+											FVectorGrid(RotatedSize.X, 0),
+											0,
+											true
+									));
+								else
+									InitialOrganisation.SetUnknownBlock(
+										FLevelOrganisation::LowApartment,
+										new FUnknownBlock(
+											FVectorGrid(LevelGrid.GetSizeX() - RotatedSize.X, RotatedSize.Y  + Space),
+											FVectorGrid(0, 0),
+											0,
+											true
+									));
 							}
 						}
 					}
@@ -563,63 +826,71 @@ void AHomeGenerator::StairsPositioning(TArray<FUnknownBlock> &InitialBlocks, TAr
 
 		if(PositionFound) break;
 	}
-
-	assert(PositionFound);//If no position found for the stairs, the process exit.
+	//If no position was found for the stairs, the process exit.
+	check(PositionFound);
 }
 
-void AHomeGenerator::DivideSurface(int Level , const TArray<FUnknownBlock> &InitialBlocks, const TArray<FHallBlock> &InitialHalls)
+void AHomeGenerator::DivideSurface(const int Level, FLevelOrganisation &LevelOrganisation, TDoubleLinkedList<FUnknownBlock> &NodesToDelete)
 {
-	//Basic checks
-	assert(HallBlocks.IsValidIndex(Level) && RoomBlocks.IsValidIndex(Level));
+	check(HallBlocks.IsValidIndex(Level) && RoomBlocks.IsValidIndex(Level))
 
 	//BSP's storage initialisation
+	FLevelDivisionData LevelDivisionData(BuildingConstraints.BuildingSize.Area(), LevelOrganisation.InitialHallArea());
+	
 	TDoubleLinkedList<FUnknownBlock> ToDivide;
-	for (auto Block : InitialBlocks)
+	for (uint8 i = 0; i < FLevelOrganisation::BlockPositionsSize; ++i) 
 	{
-		Block.Level = Level;
-		ToDivide.AddHead(Block);		
+		ToDivide.AddHead(*LevelOrganisation.GetBlockList()[i]);
+		ToDivide.GetHead()->GetValue().Level = Level;
+
+		// Replaces the pointer to the initial block
+		LevelOrganisation.SetUnknownBlock(static_cast<FLevelOrganisation::EInitialBlockPositions>(i), &ToDivide.GetHead()->GetValue());
 	}
 
-	for (auto Hall : InitialHalls)
+	for (uint8 i = 0; i < FLevelOrganisation::HallPositionsSize; ++i) 
 	{
-		Hall.Level = Level;
-		HallBlocks[Level].Push(Hall);
+		HallBlocks[Level].Push(*LevelOrganisation.GetHallList()[i]);
+		HallBlocks[Level].Last().Level = Level;
+
+		// Replaces the pointer to the initial block
+		LevelOrganisation.SetHallBlock(static_cast<FLevelOrganisation::EInitialHallPositions>(i), &HallBlocks[Level].Last());
 	}
 	
 	//Divide the generated blocks
+	//When a block is generated it generate two new blocks (added to the list) before being retrieved from the list (its node is pointed by the array NodeToDelete)
 	while (ToDivide.Num() != 0)
 	{
-		TDoubleLinkedList<FUnknownBlock>::TDoubleLinkedListNode *ExHead;
-		switch (ToDivide.GetHead()->GetValue().ShouldDivide(RoomsDivisionConstraints))
+		//Removes actual node.
+		TDoubleLinkedList<FUnknownBlock>::TDoubleLinkedListNode * const ExHead = ToDivide.GetHead();
+		TDoubleLinkedList<FUnknownBlock>::TDoubleLinkedListNode *TailBuffer;
+		ToDivide.RemoveNode(ExHead, false);
+		NodesToDelete.AddHead(ExHead);
+		
+		switch (ToDivide.GetHead()->GetValue().ShouldDivide(RoomsDivisionConstraints, LevelDivisionData))
 		{
-			//Create a new room and delete the bloc from the list.
+			//Creates a new room.
 			case FUnknownBlock::DivideMethod::NO_DIVIDE:
 				RoomBlocks[Level].Push(FRoomBlock());
-				ToDivide.GetHead()->GetValue().TransformToRoom(RoomBlocks[Level].Last());
-				ToDivide.RemoveNode(ToDivide.GetHead());
+				ExHead->GetValue().TransformToRoom(RoomBlocks[Level].Last());
 				break;
 
-			//Divide the block and place the generated block at the list's end
-			//Create a hall
+			//Divides the block and places generated blocks at the list's end
+			//Creates a hall.
 			case FUnknownBlock::DivideMethod::SPLIT:
 				HallBlocks[Level].Push(FHallBlock());
-			
-				ExHead = ToDivide.GetHead();
-				ToDivide.RemoveNode(ExHead, false);
-				ToDivide.AddTail(ExHead);
 				ToDivide.AddTail(FUnknownBlock());
-
-				ExHead->GetValue().BlockSplit(RoomsDivisionConstraints, ToDivide.GetTail()->GetValue(), HallBlocks[Level].Last());
+				TailBuffer = ToDivide.GetTail();
+				ToDivide.AddTail(FUnknownBlock());
+			
+				ExHead->GetValue().BlockSplit(RoomsDivisionConstraints, TailBuffer->GetValue(), ToDivide.GetTail()->GetValue(), HallBlocks[Level].Last());
 				break;			
 
-			//Divide the block and place the generated block at the list's end 
+			//Divides the block and places generated blocks at the list's end.
 			case FUnknownBlock::DivideMethod::DIVISION:
-				ExHead = ToDivide.GetHead();
-				ToDivide.RemoveNode(ExHead, false);
-				ToDivide.AddTail(ExHead);
 				ToDivide.AddTail(FUnknownBlock());
-
-				ExHead->GetValue().BlockDivision(RoomsDivisionConstraints, ToDivide.GetTail()->GetValue());
+				TailBuffer = ToDivide.GetTail();
+				ToDivide.AddTail(FUnknownBlock());
+				ExHead->GetValue().BlockDivision(RoomsDivisionConstraints, TailBuffer->GetValue(), ToDivide.GetTail()->GetValue());
 				break;
 			
 			//Trouble in structure : exit.
@@ -631,9 +902,37 @@ void AHomeGenerator::DivideSurface(int Level , const TArray<FUnknownBlock> &Init
 	}
 }
 
+void AHomeGenerator::ComputeWallEffect(TArray<FLevelOrganisation>& LevelsOrganisation)
+{
+	check(LevelsOrganisation.Num() == BuildingConstraints.Levels)
+	TArray<FVector2D> NeededOffsets;
+	NeededOffsets.Reserve(LevelsOrganisation.Num());
+	
+	//Compute all basic data recursively
+	for (int i = 0; i < LevelsOrganisation.Num(); ++i)
+	{
+		LevelsOrganisation[i].ComputeBasicRealData(BuildingConstraints, RoomsDivisionConstraints);
+		NeededOffsets.Push(LevelsOrganisation[i].GetStairsRealOffset()); //First stores stairs offset of each lvl
+	}
+
+	//Find maximal stairs' offset
+	FVector2D MaxOffset = FVector2D::ZeroVector;
+	for (const auto &Offset : NeededOffsets)
+	{
+		if(Offset.X > MaxOffset.X)
+			MaxOffset.X = Offset.X;
+		if(Offset.Y > MaxOffset.Y)
+			MaxOffset.Y = Offset.Y;
+	}
+
+	//Finally compute all internal real data by aligning all stairs
+	for (int i = 0; i < NeededOffsets.Num(); ++i) //Then stores the offset to add to each lvl
+		LevelsOrganisation[i].ComputeAllRealData(MaxOffset - NeededOffsets[i], BuildingConstraints, RoomsDivisionConstraints);
+}
+
 void AHomeGenerator::AllocateSurface()
 {
-	assert(HallBlocks.Num() == Level && RoomBlocks.Num() == Level);
+	check(HallBlocks.Num() == BuildingConstraints.Levels && RoomBlocks.Num() == BuildingConstraints.Levels);
 
 	//Sort all rooms of the building
 	TArray<FRoomBlock *> SortedRoomBlocks;
@@ -644,10 +943,10 @@ void AHomeGenerator::AllocateSurface()
 	for (int i = 0; i < RoomBlocks.Num(); ++i)
 		for (int j = 0; j < RoomBlocks[i].Num(); ++j)
 			SortedRoomBlocks.Push(&RoomBlocks[i][j]);
-	SortedRoomBlocks.Sort();
+	SortedRoomBlocks.Sort(); //Croissant order : we define first the smallest ones
 
 	//For the next part we suppose that `Rooms`' map has already been sorted accordingly to its MinimalSide property
-	const int Diff  = NormalRoomQuantity - SortedRoomBlocks.Num();
+	const int Diff  = BuildingConstraints.NormalRoomQuantity - SortedRoomBlocks.Num();
 	if(0 < Diff)
 	{
 		TArray<FName> RoomsToAvoid;
@@ -662,6 +961,7 @@ void AHomeGenerator::AllocateSurface()
 
 			for (const auto &Room : Rooms)
 			{
+				//Here we use Floor to check the decimal part : lower one means more rounded when floored
 				const float DesiredNumber = Room.Value.NumPerHab * Inhabitants;
 				const float Rest = DesiredNumber - FMath::Floor(DesiredNumber);
 				
@@ -711,7 +1011,7 @@ void AHomeGenerator::AllocateSurface()
 			}
 		}
 	}
-	else
+	else if(0 > Diff)
 	{
 		TArray<FName> RoomsToAdd;
 		RoomsToAdd.Reserve(-Diff);
@@ -725,6 +1025,7 @@ void AHomeGenerator::AllocateSurface()
 
 			for (const auto &Room : Rooms)
 			{
+				//Here we use Floor to check the decimal part : bigger one means less rounded when floored
 				const float DesiredNumber = Room.Value.NumPerHab * Inhabitants;
 				const float Rest = DesiredNumber - FMath::Floor(DesiredNumber);
 
@@ -837,8 +1138,8 @@ void AHomeGenerator::GenerateRoomDoors(const FName& RoomType, const FRoomBlock& 
 
 void AHomeGenerator::GenerateFurniture(const FName& RoomType, const FVector& RoomOrigin, FRoomGrid& RoomGrid)
 {
-	check(RoomGrid.GetSizeX() > 0 && RoomGrid.GetSizeY() > 0)
 	const FRoom * const Room = Rooms.Find(RoomType);
+	check(RoomGrid.GetSizeX() > 0 && RoomGrid.GetSizeY() > 0)
 	check(Room->GetMinimalSide() <= RoomGrid.GetSizeX() &&  Room->GetMinimalSide() <= RoomGrid.GetSizeY())
 
 	//Possible positions
@@ -847,11 +1148,6 @@ void AHomeGenerator::GenerateFurniture(const FName& RoomType, const FVector& Roo
 	TArray<EFurnitureRotation> Rotations = {EFurnitureRotation::ROT0, EFurnitureRotation::ROT90, EFurnitureRotation::ROT180, EFurnitureRotation::ROT270};
 	GenerateRangeArray(PositionX, RoomGrid.GetSizeX());
 	GenerateRangeArray(PositionY, RoomGrid.GetSizeY());
-
-	//Shuffle everything here to allow more random generation (useless to update on each mesh)
-	ShuffleArray(PositionX);
-	ShuffleArray(PositionY);
-	ShuffleArray(Rotations);
 
 	//Dependencies management
 	TArray<FDependencyBuffer> FurnitureWithDep;

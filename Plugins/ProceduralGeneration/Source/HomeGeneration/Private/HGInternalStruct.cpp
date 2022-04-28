@@ -1,17 +1,23 @@
 ﻿//Copyright
 
-#include <assert.h>
 #include "HGInternalStruct.h"
 #include "HomeGenerator.h"
+#include <assert.h>
 
 #define CONSTRUCT_GRID(X,Y) check(X > 0 && Y > 0) Grid.SetNum(X); for (int i = 0; i < X; ++i) { Grid[i].SetNum(X); }
 
-FBasicBlock::FBasicBlock() : Level(0) {}
+const FVector2D& FBasicBlock::GetRealSize() const
+{
+	return RealSize;
+}
+
+const FVector2D& FBasicBlock::GetRealOffset() const
+{
+	return RealOffset;
+}
 
 FBasicBlock::FBasicBlock(const FVectorGrid& _Size, const FVectorGrid& _GlobalPosition, int _Level)
 	: Size(_Size), GlobalPosition(_GlobalPosition), Level(_Level) {}
-
-FRoomCell::FRoomCell() : Type(ERoomCellType::EMPTY), FurnitureDependencyMarker(0) {}
 
 uint32 FRoomCell::IndexToMarker(uint8 FurnitureIndex)
 {
@@ -24,8 +30,6 @@ uint32 FRoomCell::IndexToMarker(uint8 FurnitureIndex)
 
 	return Buffer;
 }
-
-FFurnitureRect::FFurnitureRect() : Rotation(EFurnitureRotation::ROT0) {}
 
 FFurnitureRect::FFurnitureRect(EFurnitureRotation _Rotation, const FVectorGrid& _Position, const FVectorGrid& _Size) : Rotation(_Rotation), Position(_Position), Size(_Size) {}
 
@@ -473,7 +477,7 @@ void FRoomGrid::MarkRect(const FFurnitureRect& RotatedPosition, ERoomCellType Ce
 }
 
 FDoorBlock::FDoorBlock(const FRoomBlock* _MainParent, const FRoomBlock* _SecondParent, 	const EGenerationAxe _OpeningSide, UFurnitureMeshAsset* _DoorAsset)
-	: ParentMain(_MainParent), ParentSecond(_SecondParent), OpeningSide(_OpeningSide), Placed(false), GlobalPosition(-1, -1), DoorAsset(_DoorAsset) {}
+	: ParentMain(_MainParent), ParentSecond(_SecondParent), OpeningSide(_OpeningSide), DoorAsset(_DoorAsset) {}
 
 void FDoorBlock::SaveLocalPosition(const FVectorGrid& LocalPosition, const FRoomBlock& Parent)
 {
@@ -602,15 +606,20 @@ bool FRoomBlock::operator<(const FRoomBlock& B) const
 FDependencyBuffer::FDependencyBuffer(const TArray<FFurnitureDependency>& _Dependencies,	const FFurnitureRect& _ParentPosition)
 	: Dependencies(_Dependencies), ParentPosition(_ParentPosition) {}
 
+FLevelDivisionData::FLevelDivisionData(int _LevelTotalArea, int _HallArea) : HallTotalArea(_HallArea), LevelTotalArea(_LevelTotalArea) {}
+
+float FLevelDivisionData::GetFutureHallRatio(int HallArea) const
+{
+	return (static_cast<float>(HallTotalArea) + static_cast<float>(HallArea)) / static_cast<float>(LevelTotalArea);
+}
+
 FHallBlock::FHallBlock(const FVectorGrid& _Size, const FVectorGrid& _GlobalPosition, int _Level)
 	: FBasicBlock(_Size, _GlobalPosition, _Level) {}
 
-FUnknownBlock::FUnknownBlock() : FBasicBlock(), DivideAlongX(true), NoMoreSplit(false), DivideDecision(DivideMethod::ERROR) {}
-
 FUnknownBlock::FUnknownBlock(const FVectorGrid& _Size, const FVectorGrid& _GlobalPosition, int _Level, bool _AlongX)
-	: FBasicBlock(_Size, _GlobalPosition, _Level), DivideAlongX(_AlongX), NoMoreSplit(false), DivideDecision(DivideMethod::ERROR) {}
+	: FBasicBlock(_Size, _GlobalPosition, _Level), DivideAlongX(_AlongX) {}
 
-FUnknownBlock::DivideMethod FUnknownBlock::ShouldDivide(const FRoomsDivisionConstraints& DivisionCst) const
+FUnknownBlock::DivideMethod FUnknownBlock::ShouldDivide(const FRoomsDivisionConstraints& DivisionCst, FLevelDivisionData& DivisionData) const
 {
 	//Basic checks
 	assert(GlobalPosition.X >= 0 && GlobalPosition.Y >= 0);
@@ -625,7 +634,8 @@ FUnknownBlock::DivideMethod FUnknownBlock::ShouldDivide(const FRoomsDivisionCons
 	{
 		const bool ShouldStopSplit = Size.X < DivisionCst.StopSplitSide
 			|| DivisionCst.ABSMinimalSide * 2  > Size.X - DivisionCst.HallWidth
-			|| NoMoreSplit;
+			|| NoMoreSplit
+			|| DivisionData.GetFutureHallRatio(Size.Y * DivisionCst.HallWidth) > DivisionCst.MaxHallRatio;
 		
 		if(DivisionCst.ABSMinimalSide * 2 > Size.X)
 			DivideDecision = DivideMethod::NO_DIVIDE;
@@ -643,12 +653,15 @@ FUnknownBlock::DivideMethod FUnknownBlock::ShouldDivide(const FRoomsDivisionCons
 			else
 				DivideDecision =  DivideMethod::SPLIT;
 		}
+
+		if(DivideDecision == DivideMethod::SPLIT) DivisionData.HallTotalArea += Size.Y * DivisionCst.HallWidth;
 	}
 	else
 	{
 		const bool ShouldStopSplit = Size.Y < DivisionCst.StopSplitSide
 			|| DivisionCst.ABSMinimalSide * 2  > Size.Y - DivisionCst.HallWidth
-			|| NoMoreSplit;
+			|| NoMoreSplit
+			|| DivisionData.GetFutureHallRatio(Size.X * DivisionCst.HallWidth) > DivisionCst.MaxHallRatio;
 		
 		if(DivisionCst.ABSMinimalSide * 2 > Size.Y)
 			DivideDecision = DivideMethod::NO_DIVIDE;
@@ -666,11 +679,13 @@ FUnknownBlock::DivideMethod FUnknownBlock::ShouldDivide(const FRoomsDivisionCons
 			else
 				DivideDecision = DivideMethod::SPLIT;
 		}
+		
+		if(DivideDecision == DivideMethod::SPLIT) DivisionData.HallTotalArea += Size.X * DivisionCst.HallWidth;
 	}
 	return DivideDecision;
 }
 
-bool FUnknownBlock::BlockSplit(const FRoomsDivisionConstraints& DivisionCst, FUnknownBlock& SecondResultedBlock, FHallBlock& ResultHall)
+bool FUnknownBlock::BlockSplit(const FRoomsDivisionConstraints& DivisionCst, FUnknownBlock &FirstResultedBlock,  FUnknownBlock& SecondResultedBlock, FHallBlock& ResultHall)
 {
 	//Basic checks
 	if(DivideDecision != DivideMethod::SPLIT)
@@ -685,14 +700,15 @@ bool FUnknownBlock::BlockSplit(const FRoomsDivisionConstraints& DivisionCst, FUn
 		ResultHall.Size = FVectorGrid(DivisionCst.HallWidth, Size.Y);
 		ResultHall.GlobalPosition = GlobalPosition + FVectorGrid(HallAxis, 0);
 
-		//Setup the returned block (highest X location)
+		//Setup first block
+		FirstResultedBlock.DivideAlongX = false;
+		FirstResultedBlock.Size = FVectorGrid(HallAxis, Size.Y);
+		FirstResultedBlock.GlobalPosition = GlobalPosition;
+
+		//Setup second block (highest X location)
 		SecondResultedBlock.DivideAlongX = false;
 		SecondResultedBlock.Size = FVectorGrid(Size.X - (HallAxis + DivisionCst.HallWidth), Size.Y);
 		SecondResultedBlock.GlobalPosition = GlobalPosition + FVectorGrid(HallAxis + DivisionCst.HallWidth, 0);
-
-		//Setup this block
-		DivideAlongX = false;
-		Size = FVectorGrid(HallAxis, Size.Y);
 	}
 	else
 	{
@@ -702,25 +718,32 @@ bool FUnknownBlock::BlockSplit(const FRoomsDivisionConstraints& DivisionCst, FUn
 		ResultHall.Size = FVectorGrid(Size.X, DivisionCst.HallWidth);
 		ResultHall.GlobalPosition = GlobalPosition + FVectorGrid(0, HallAxis);
 
-		//Setup the returned block (highest Y location)
+		//Setup first block
+		FirstResultedBlock.DivideAlongX = true;
+		FirstResultedBlock.Size = FVectorGrid(Size.X, HallAxis);
+		FirstResultedBlock.GlobalPosition = GlobalPosition;
+
+		//Setup second block (highest Y location)
 		SecondResultedBlock.DivideAlongX = true;
 		SecondResultedBlock.Size = FVectorGrid(Size.X, Size.Y - (HallAxis + DivisionCst.HallWidth));
 		SecondResultedBlock.GlobalPosition = GlobalPosition + FVectorGrid(0, HallAxis + DivisionCst.HallWidth);
-
-		//Setup this block
-		DivideAlongX = true;
-		Size = FVectorGrid(Size.X, HallAxis);
 	}
 
 	//Redundant affectations
-	SecondResultedBlock.DivideDecision = DivideDecision = DivideMethod::ERROR;
-	SecondResultedBlock.NoMoreSplit = NoMoreSplit = false;
-	SecondResultedBlock.Level = ResultHall.Level = Level;
+	SecondResultedBlock.DivideDecision	= FirstResultedBlock.DivideDecision	= DivideMethod::ERROR;
+	SecondResultedBlock.NoMoreSplit		= FirstResultedBlock.NoMoreSplit	= false;
+	SecondResultedBlock.Level			= FirstResultedBlock.Level			= ResultHall.Level = Level;
 
+	//Link setup
+	Child1 = &FirstResultedBlock;
+	Child2 = &SecondResultedBlock;
+	HallBlock = &ResultHall;
+	FirstResultedBlock.Parent = SecondResultedBlock.Parent = this;
+	
 	return true;
 }
 
-bool FUnknownBlock::BlockDivision(const FRoomsDivisionConstraints& DivisionCst, FUnknownBlock& SecondResultedBlock)
+bool FUnknownBlock::BlockDivision(const FRoomsDivisionConstraints& DivisionCst, FUnknownBlock &FirstResultedBlock, FUnknownBlock& SecondResultedBlock)
 {
 	//Basic checks
 	if(DivideDecision != DivideMethod::DIVISION)
@@ -731,41 +754,531 @@ bool FUnknownBlock::BlockDivision(const FRoomsDivisionConstraints& DivisionCst, 
 	{
 		const int WallAxis = FMath::RandRange(DivisionCst.ABSMinimalSide, Size.X - DivisionCst.ABSMinimalSide);
 
-		//Setup the returned block (highest X location)
+		//Setup first block
+		FirstResultedBlock.DivideAlongX	= false;
+		FirstResultedBlock.Size	= FVectorGrid(WallAxis, Size.Y);
+		FirstResultedBlock.GlobalPosition = GlobalPosition;
+
+		//Setup second block (highest X location)
 		SecondResultedBlock.DivideAlongX = false;
 		SecondResultedBlock.Size = FVectorGrid(Size.X - WallAxis, Size.Y);
 		SecondResultedBlock.GlobalPosition = GlobalPosition + FVectorGrid(WallAxis, 0);
-
-		//Setup this block
-		DivideAlongX = false;
-		Size = FVectorGrid(WallAxis, Size.Y);
 	}
 	else
 	{
 		const int WallAxis = FMath::RandRange(DivisionCst.ABSMinimalSide, Size.Y - DivisionCst.ABSMinimalSide);
 
-		//Setup the returned block (highest X location)
+		//Setup first block
+		FirstResultedBlock.DivideAlongX = true;
+		FirstResultedBlock.Size = FVectorGrid(Size.X, WallAxis);
+		FirstResultedBlock.GlobalPosition = GlobalPosition;
+
+		//Setup the returned block (highest Y location)
 		SecondResultedBlock.DivideAlongX = true;
 		SecondResultedBlock.Size = FVectorGrid(Size.X, Size.Y - WallAxis);
 		SecondResultedBlock.GlobalPosition = GlobalPosition + FVectorGrid(0, WallAxis);
-
-		//Setup this block
-		DivideAlongX = true;
-		Size = FVectorGrid(Size.X, WallAxis);
 	}
 
 	//Redundant affectations
-	SecondResultedBlock.DivideDecision = DivideDecision = DivideMethod::ERROR;
-	SecondResultedBlock.NoMoreSplit = NoMoreSplit = true;
-	SecondResultedBlock.Level = Level;
+	SecondResultedBlock.DivideDecision	= FirstResultedBlock.DivideDecision = DivideMethod::ERROR;
+	SecondResultedBlock.NoMoreSplit		= FirstResultedBlock.NoMoreSplit	= true;
+	SecondResultedBlock.Level			= FirstResultedBlock.Level			= Level;
+
+	//Link setup
+	Child1 = &FirstResultedBlock;
+	Child2 = &SecondResultedBlock;
+	FirstResultedBlock.Parent = SecondResultedBlock.Parent = this;
 
 	return true;
 }
 
-void FUnknownBlock::TransformToRoom(FRoomBlock& CreatedRoom) const
+void FUnknownBlock::TransformToRoom(FRoomBlock& CreatedRoom)
 {
 	CreatedRoom.RoomType = "";
 	CreatedRoom.Level = Level;
 	CreatedRoom.Size = Size;
 	CreatedRoom.GlobalPosition = GlobalPosition;
+	Room = &CreatedRoom;
+}
+
+void FUnknownBlock::ComputeRealSizeRecursive(const FBuildingConstraint &BuildingCst, const FRoomsDivisionConstraints &RoomDivisionCst)
+{
+	check(DivideDecision != DivideMethod::ERROR);
+	if(Child1 == nullptr && Child2 == nullptr || DivideDecision == DivideMethod::NO_DIVIDE) //End case
+	{
+		RealSize.X = Size.X * BuildingCst.GridSnapLength + 2 * BuildingCst.WallWidth;
+		RealSize.Y = Size.Y * BuildingCst.GridSnapLength + 2 * BuildingCst.WallWidth;
+		Room->RealSize = RealSize;
+		return;
+	}
+
+	Child1->ComputeRealSizeRecursive(BuildingCst, RoomDivisionCst);
+	Child2->ComputeRealSizeRecursive(BuildingCst, RoomDivisionCst);
+
+	//Basic checks
+	auto CheckSize = [&] (const FVectorGrid &Vector, const FVector2D &Real) -> bool {
+		return Vector.X * BuildingCst.GridSnapLength <= Real.X
+			&& Vector.Y * BuildingCst.GridSnapLength <= Real.Y;
+	};
+	check(CheckSize(Child1->Size, Child1->RealSize));
+	check(CheckSize(Child2->Size, Child2->RealSize));
+
+	if(DivideAlongX)
+	{
+		RealSize.X = Child1->RealSize.X + Child2->RealSize.X;
+		RealSize.Y = FMath::Max(Child1->RealSize.Y, Child2->RealSize.Y);
+
+		if(DivideDecision == DivideMethod::SPLIT) //Adds hall width
+		{
+			RealSize.X += RoomDivisionCst.HallWidth * BuildingCst.GridSnapLength;
+			
+			HallBlock->RealSize.X = RoomDivisionCst.HallWidth * BuildingCst.GridSnapLength;
+			HallBlock->RealSize.Y = RealSize.Y - BuildingCst.WallWidth; //A hall must always pass through one wall (but not the other)
+		}
+		else if(DivideDecision == DivideMethod::DIVISION) //Removes collapsed walls (only one middle wall)
+			RealSize.X -= BuildingCst.WallWidth;
+	}
+	else
+	{
+		RealSize.X = FMath::Max(Child1->RealSize.X, Child2->RealSize.X);
+		RealSize.Y = Child1->RealSize.Y + Child2->RealSize.Y + RoomDivisionCst.HallWidth * BuildingCst.GridSnapLength;
+
+		if(DivideDecision == DivideMethod::SPLIT) //Adds hall width
+		{
+			RealSize.Y += RoomDivisionCst.HallWidth * BuildingCst.GridSnapLength;
+			
+			HallBlock->RealSize.X = RealSize.X - BuildingCst.WallWidth; //A hall must always pass through one wall (but not the other)
+			HallBlock->RealSize.Y = RoomDivisionCst.HallWidth * BuildingCst.GridSnapLength;
+		}
+		else if(DivideDecision == DivideMethod::DIVISION) //Removes collapsed walls (only one middle wall)
+			RealSize.Y -= BuildingCst.WallWidth;
+	}
+}
+
+void FUnknownBlock::ComputeRealOffsetRecursive(const FBuildingConstraint& BuildingCst, const FRoomsDivisionConstraints& RoomDivisionCst, const bool IsHighestAxe) const
+{
+	assert(DivideDecision != DivideMethod::ERROR);
+	if(Child1 == nullptr && Child2 == nullptr || DivideDecision == DivideMethod::NO_DIVIDE) //End case
+	{
+		Room->RealOffset = RealOffset;
+		return;
+	}
+	
+	if(DivideAlongX)
+	{
+		Child1->RealOffset.X = RealOffset.X; //Lowest X position
+		Child2->RealOffset.X = RealOffset.X + Child1->RealSize.X; //It includes 3 walls
+		Child1->RealOffset.Y = RealOffset.Y + (RealSize.Y - Child1->RealSize.Y) / 2;
+		Child2->RealOffset.Y = RealOffset.Y + (RealSize.Y - Child2->RealSize.Y) / 2;
+
+		if(DivideDecision == DivideMethod::SPLIT) //Adds hall width
+		{
+			Child2->RealOffset.X  += RoomDivisionCst.HallWidth * BuildingCst.GridSnapLength;
+
+			HallBlock->RealOffset.X = RealOffset.X + Child1->RealSize.X - BuildingCst.WallWidth;
+			HallBlock->RealOffset.Y = RealOffset.Y - (IsHighestAxe ? BuildingCst.WallWidth : 0.f);
+		}
+		else if(DivideDecision == DivideMethod::DIVISION) //Removes collapsed walls (only one middle wall)
+			Child2->RealOffset.X  -= BuildingCst.WallWidth;
+	}
+	else
+	{
+		Child1->RealOffset.Y = RealOffset.Y; //Lowest Y position
+		Child2->RealOffset.Y = RealOffset.Y + Child1->RealSize.Y;//It includes 3 walls
+		Child1->RealOffset.X = RealOffset.X + (RealSize.X - Child1->RealSize.X) / 2;
+		Child2->RealOffset.X = RealOffset.X + (RealSize.X - Child2->RealSize.X) / 2;
+
+		if(DivideDecision == DivideMethod::SPLIT) //Adds hall width
+		{
+			Child2->RealOffset.Y  += RoomDivisionCst.HallWidth * BuildingCst.GridSnapLength;
+
+			HallBlock->RealOffset.X = RealOffset.X - (IsHighestAxe ? BuildingCst.WallWidth : 0.f);
+			HallBlock->RealOffset.Y = RealOffset.Y + Child1->RealSize.Y - BuildingCst.WallWidth;
+		}
+		else if(DivideDecision == DivideMethod::DIVISION) //Removes collapsed walls (only one middle wall)
+			Child2->RealOffset.Y  -= BuildingCst.WallWidth;
+	}
+
+	Child1->ComputeRealOffsetRecursive(BuildingCst, RoomDivisionCst, false);
+	Child2->ComputeRealOffsetRecursive(BuildingCst, RoomDivisionCst, true);
+}
+
+FLevelOrganisation::FLevelOrganisation()
+{
+	InitialBlocks.Init(nullptr, BlockPositionsSize);
+	InitialHalls.Init(nullptr, HallPositionsSize);
+}
+
+void FLevelOrganisation::SetUnknownBlock(EInitialBlockPositions Index, FUnknownBlock* Block)
+{
+	if(InitialBlocks.IsValidIndex(Index)) InitialBlocks[Index] = Block;
+}
+
+void FLevelOrganisation::SetHallBlock(EInitialHallPositions Index, FHallBlock* Hall)
+{
+	if(InitialHalls.IsValidIndex(Index)) InitialHalls[Index] = Hall;
+}
+
+FLevelOrganisation::EInitialBlockPositions FLevelOrganisation::GetUnknownBlockPosition(FUnknownBlock *Block) const
+{
+	int Index;
+	if(InitialBlocks.Find(Block, Index)) return static_cast<EInitialBlockPositions>(Index);
+	return BlockPositionsSize;
+}
+
+FLevelOrganisation::EInitialHallPositions FLevelOrganisation::GetHallBlockPosition(FHallBlock *Hall) const
+{
+	int Index;
+	if(InitialHalls.Find(Hall, Index)) return static_cast<EInitialHallPositions>(Index);
+	return HallPositionsSize;
+}
+
+void FLevelOrganisation::Empty(bool bDelete)
+{
+	for(uint8 i = 0; i < BlockPositionsSize; ++i)
+	{
+		if (bDelete) delete InitialBlocks[i];
+		InitialBlocks[i] = nullptr;
+	}
+	
+	for(uint8 i = 0; i < HallPositionsSize; ++i)
+	{
+		if (bDelete) delete InitialHalls[i];
+		InitialHalls[i] = nullptr;
+	}
+}
+
+int FLevelOrganisation::InitialHallArea() const
+{
+	return	(InitialHalls[LowCorridor]	? InitialHalls[LowCorridor]->Size.Area()	: 0)
+		+	(InitialHalls[HighCorridor] ? InitialHalls[HighCorridor]->Size.Area()	: 0)
+		+	(InitialHalls[LowMargin]	? InitialHalls[LowMargin]->Size.Area()		: 0)
+		+	(InitialHalls[HighMargin]	? InitialHalls[HighMargin]->Size.Area()		: 0);
+}
+
+void FLevelOrganisation::ComputeBasicRealData(const FBuildingConstraint& BuildingCst, const FRoomsDivisionConstraints& RoomDivisionCst)
+{
+	check(InitialHalls[LowCorridor] && InitialBlocks[LowWing] || InitialHalls[HighCorridor] && InitialBlocks[HighWing]);
+	check(InitialHalls[Stairs]);
+	const bool AlongX = (InitialHalls[LowCorridor] && InitialHalls[LowCorridor]->GlobalPosition.Y == 0) || (InitialHalls[HighCorridor] && InitialHalls[HighCorridor]->GlobalPosition.Y == 0);
+	RealOffset = FVector2D::UnitVector * BuildingCst.WallWidth;
+
+	for(const auto Block : InitialBlocks)
+		if (Block != nullptr) Block->ComputeRealSizeRecursive(BuildingCst, RoomDivisionCst);
+
+	//Alternate value for Wing when they aren't not present take in account the fact that the corresponding corridor doesn't exist neither in this case.
+	if(AlongX)
+	{		
+		//This' size calculus
+		RealSize.X =
+			  (InitialBlocks[LowWing]		? InitialBlocks[LowWing]->RealSize.X						: 0.f)
+			+ (InitialBlocks[HighWing]		? InitialBlocks[HighWing]->RealSize.X						: 0.f)
+			+ (InitialHalls[LowCorridor]	? RoomDivisionCst.HallWidth * BuildingCst.GridSnapLength	: 0.f)
+			+ (InitialHalls[HighCorridor]	? RoomDivisionCst.HallWidth * BuildingCst.GridSnapLength	: 0.f)
+			+ FMath::Max(
+				InitialBlocks[LowApartment]	? InitialBlocks[LowApartment]->RealSize.X	: 0.f,
+				InitialBlocks[HighApartment]	? InitialBlocks[HighApartment]->RealSize.X	: 0.f
+			);
+
+		RealSize.Y = FMath::Max3(
+				InitialBlocks[LowWing]	? InitialBlocks[LowWing]->RealSize.Y	: 0.f,
+				InitialBlocks[HighWing]	? InitialBlocks[HighWing]->RealSize.Y	: 0.f,
+				InitialHalls[Stairs]->Size.Y * BuildingCst.GridSnapLength
+					+ (InitialBlocks[LowApartment]	? InitialBlocks[LowApartment]->RealSize.Y	: 0.f)
+					+ (InitialBlocks[HighApartment] ? InitialBlocks[HighApartment]->RealSize.Y	: 0.f)
+			);
+
+		//Corridors size
+		if(InitialHalls[HighCorridor])
+		{
+			InitialHalls[HighCorridor]->RealSize.X = RoomDivisionCst.HallWidth * BuildingCst.GridSnapLength;
+			InitialHalls[HighCorridor]->RealSize.Y = RealSize.Y - 2 * BuildingCst.WallWidth;
+		}
+		if(InitialHalls[LowCorridor])
+		{
+			InitialHalls[LowCorridor]->RealSize.X = RoomDivisionCst.HallWidth * BuildingCst.GridSnapLength;
+			InitialHalls[LowCorridor]->RealSize.Y = RealSize.Y - 2 * BuildingCst.WallWidth;
+		}
+
+		//Margin and Stairs size
+		InitialHalls[Stairs]->RealSize = InitialHalls[Stairs]->Size * BuildingCst.GridSnapLength;		
+		if(InitialHalls[LowMargin]) InitialHalls[LowMargin]->RealSize = InitialHalls[LowMargin]->Size * BuildingCst.GridSnapLength;
+		if(InitialHalls[HighMargin]) InitialHalls[HighMargin]->RealSize = InitialHalls[HighMargin]->Size * BuildingCst.GridSnapLength;
+		
+		const int MarginNumber = (InitialHalls[HighMargin] ? 1 : 0) + (InitialHalls[LowMargin] ? 1 : 0);
+		const float AddMarginX = RealSize.X
+			- (InitialBlocks[LowWing]		? InitialBlocks[LowWing]->RealSize.X		: BuildingCst.WallWidth)
+			- (InitialBlocks[HighWing]		? InitialBlocks[HighWing]->RealSize.X		: BuildingCst.WallWidth)
+			- (InitialHalls[LowCorridor]	? InitialHalls[LowCorridor]->RealSize.X		: 0.f)
+			- (InitialHalls[HighCorridor]	? InitialHalls[HighCorridor]->RealSize.X	: 0.f)
+			- (InitialHalls[LowMargin]		? InitialHalls[LowMargin]->RealSize.X		: 0.f)
+			- (InitialHalls[HighMargin]		? InitialHalls[HighMargin]->RealSize.X		: 0.f)
+			- InitialHalls[Stairs]->RealSize.X;
+		
+		const float AddMarginY = RealSize.Y
+			- (InitialBlocks[LowApartment]	? InitialBlocks[LowApartment]->RealSize.Y	: BuildingCst.WallWidth)
+			- (InitialBlocks[HighApartment] ? InitialBlocks[HighApartment]->RealSize.Y	: BuildingCst.WallWidth)
+			- InitialHalls[Stairs]->RealSize.Y;
+
+		InitialHalls[Stairs]->RealSize.Y += AddMarginY;
+		if(MarginNumber == 0) InitialHalls[Stairs]->RealSize.X += AddMarginX; //Actually increase size instead of increasing offset
+		
+		if(InitialHalls[LowMargin])
+		{
+			InitialHalls[LowMargin]->RealSize.Y += AddMarginY;
+			InitialHalls[LowMargin]->RealSize.X += AddMarginX / MarginNumber;
+		}
+		if(InitialHalls[HighMargin])
+		{
+			InitialHalls[HighMargin]->RealSize.Y += AddMarginY;
+			InitialHalls[HighMargin]->RealSize.X += AddMarginX / MarginNumber;
+		}
+
+		//Stairs offset (actually not exactly centered if the stair hall need to be extended)
+		InitialHalls[Stairs]->RealOffset.X =
+			  (InitialBlocks[LowWing]		? InitialBlocks[LowWing]->RealSize.X	: BuildingCst.WallWidth)
+			+ (InitialHalls[LowCorridor]	? InitialHalls[LowCorridor]->RealSize.X	: 0.f)
+			+ (InitialHalls[LowMargin]		? InitialHalls[LowMargin]->RealSize.X	: 0.f); //Includes the additional wall
+
+		InitialHalls[Stairs]->RealOffset.Y = InitialBlocks[LowApartment] ? InitialBlocks[LowApartment]->RealSize.Y : BuildingCst.WallWidth;
+	}
+	else
+	{
+		//This' size calculus
+		RealSize.Y = (InitialBlocks[LowWing] ? InitialBlocks[LowWing]->RealSize.Y : 0.f)
+			+ (InitialBlocks[HighWing] ? InitialBlocks[HighWing]->RealSize.Y : 0.f)
+			+ (InitialHalls[LowCorridor] ? RoomDivisionCst.HallWidth * BuildingCst.GridSnapLength : 0.f)
+			+ (InitialHalls[HighCorridor] ? RoomDivisionCst.HallWidth * BuildingCst.GridSnapLength : 0.f)
+			+ FMath::Max(
+				InitialBlocks[LowApartment] ? InitialBlocks[LowApartment]->RealSize.Y : 0.f,
+				InitialBlocks[HighApartment] ? InitialBlocks[HighApartment]->RealSize.Y : 0.f
+			);
+
+		RealSize.X = FMath::Max3(
+				InitialBlocks[LowWing] ? InitialBlocks[LowWing]->RealSize.X : 0.f,
+				InitialBlocks[HighWing] ? InitialBlocks[HighWing]->RealSize.X : 0.f,
+				InitialHalls[Stairs]->RealSize.X
+					+ (InitialBlocks[LowApartment] ? InitialBlocks[LowApartment]->RealSize.X : 0.f)
+					+ (InitialBlocks[HighApartment] ? InitialBlocks[HighApartment]->RealSize.X : 0.f)
+			);
+
+		//Corridors size
+		if(InitialHalls[HighCorridor])
+		{
+			InitialHalls[HighCorridor]->RealSize.Y = RoomDivisionCst.HallWidth * BuildingCst.GridSnapLength;
+			InitialHalls[HighCorridor]->RealSize.X = RealSize.Y - 2 * BuildingCst.WallWidth;
+		}
+		if(InitialHalls[LowCorridor])
+		{
+			InitialHalls[LowCorridor]->RealSize.Y = RoomDivisionCst.HallWidth * BuildingCst.GridSnapLength;
+			InitialHalls[LowCorridor]->RealSize.X = RealSize.Y - 2 * BuildingCst.WallWidth;
+		}
+
+		//Margin and Stairs size
+		InitialHalls[Stairs]->RealSize = InitialHalls[Stairs]->Size * BuildingCst.GridSnapLength;		
+		if(InitialHalls[LowMargin]) InitialHalls[LowMargin]->RealSize = InitialHalls[LowMargin]->Size * BuildingCst.GridSnapLength;
+		if(InitialHalls[HighMargin]) InitialHalls[HighMargin]->RealSize = InitialHalls[HighMargin]->Size * BuildingCst.GridSnapLength;
+		
+		const int MarginNumber = (InitialHalls[HighMargin] ? 1 : 0) + (InitialHalls[LowMargin] ? 1 : 0);
+		const float AddMarginY = RealSize.Y
+			- (InitialBlocks[LowWing]		? InitialBlocks[LowWing]->RealSize.Y		: BuildingCst.WallWidth)
+			- (InitialBlocks[HighWing]		? InitialBlocks[HighWing]->RealSize.Y		: BuildingCst.WallWidth)
+			- (InitialHalls[LowCorridor]	? InitialHalls[LowCorridor]->RealSize.Y		: 0.f)
+			- (InitialHalls[HighCorridor]	? InitialHalls[HighCorridor]->RealSize.Y	: 0.f)
+			- (InitialHalls[LowMargin]		? InitialHalls[LowMargin]->RealSize.Y		: 0.f)
+			- (InitialHalls[HighMargin]		? InitialHalls[HighMargin]->RealSize.Y		: 0.f)
+			- InitialHalls[Stairs]->RealSize.Y;
+		
+		const float AddMarginX = RealSize.X
+			- (InitialBlocks[LowApartment]	? InitialBlocks[LowApartment]->RealSize.X	: BuildingCst.WallWidth)
+			- (InitialBlocks[HighApartment] ? InitialBlocks[HighApartment]->RealSize.X	: BuildingCst.WallWidth)
+			- InitialHalls[Stairs]->RealSize.X;
+
+		InitialHalls[Stairs]->RealSize.X += AddMarginX;
+		if(MarginNumber == 0) InitialHalls[Stairs]->RealSize.Y += AddMarginY;
+		
+		if(InitialHalls[LowMargin])
+		{
+			InitialHalls[LowMargin]->RealSize.X += AddMarginX;
+			InitialHalls[LowMargin]->RealSize.Y += AddMarginY / MarginNumber;
+		}
+		if(InitialHalls[HighMargin])
+		{
+			InitialHalls[HighMargin]->RealSize.X += AddMarginX;
+			InitialHalls[HighMargin]->RealSize.Y += AddMarginY / MarginNumber;
+		}
+
+		//Stairs offset (actually not exactly centered if the stair hall need to be extended)
+		InitialHalls[Stairs]->RealOffset.X = InitialBlocks[LowApartment] ? InitialBlocks[LowApartment]->RealSize.X : BuildingCst.WallWidth;
+
+		InitialHalls[Stairs]->RealOffset.Y = (InitialBlocks[LowWing] ? InitialBlocks[LowWing]->RealSize.Y : BuildingCst.WallWidth)
+			+ (InitialHalls[LowCorridor] ? RoomDivisionCst.HallWidth * BuildingCst.GridSnapLength + BuildingCst.WallWidth: 0.f)
+			+ (InitialHalls[LowMargin] ? InitialHalls[LowMargin]->RealSize.Y : 0.f);
+	}
+	
+	//Don't launch recursive offset because before we should calculate all levels
+}
+
+void FLevelOrganisation::ComputeAllRealData(const FVector2D& LevelOffset, const FBuildingConstraint& BuildingCst, const FRoomsDivisionConstraints& RoomDivisionCst)
+{
+	check(InitialHalls[LowCorridor] && InitialBlocks[LowWing] || InitialHalls[HighCorridor] && InitialBlocks[HighWing]);
+	check(InitialHalls[Stairs]);
+	const bool AlongX = (InitialHalls[LowCorridor] && InitialHalls[LowCorridor]->GlobalPosition.Y == 0) || (InitialHalls[HighCorridor] && InitialHalls[HighCorridor]->GlobalPosition.Y == 0);
+	RealOffset += LevelOffset;//WallWidth + Space for stairs
+	
+	if(AlongX)
+	{
+		//Corridors and wings offset (use this offset)
+		if(InitialBlocks[LowWing])
+		{
+			InitialBlocks[LowWing]->RealOffset = RealOffset;
+			InitialBlocks[LowWing]->RealOffset.Y += (RealSize.Y - InitialBlocks[LowWing]->RealSize.Y) / 2.f;
+			InitialHalls[LowCorridor]->RealOffset.X = LevelOffset.X + InitialBlocks[LowWing]->Size.X;
+			InitialHalls[LowCorridor]->RealOffset.Y = RealOffset.Y;
+		}
+
+		if(InitialBlocks[HighWing])
+		{
+			InitialBlocks[HighWing]->RealOffset = RealOffset;
+			InitialBlocks[HighWing]->RealOffset.X += RealSize.X - InitialBlocks[HighWing]->RealSize.X;
+			InitialBlocks[HighWing]->RealOffset.Y += (RealSize.Y - InitialBlocks[LowWing]->RealSize.Y) / 2.f;
+			InitialHalls[HighCorridor]->RealOffset.X = InitialBlocks[HighWing]->RealOffset.X
+				- BuildingCst.WallWidth
+				- InitialHalls[HighCorridor]->RealSize.X;
+			InitialHalls[HighCorridor]->RealOffset.Y = RealOffset.Y;
+		}
+
+		//Margin and stairs offset (use stairs offset)
+		InitialHalls[Stairs]->RealOffset += LevelOffset;
+
+		if(InitialHalls[LowMargin])
+		{
+			InitialHalls[LowMargin]->RealOffset = InitialHalls[Stairs]->RealOffset;
+			InitialHalls[LowMargin]->RealOffset.X -= InitialBlocks[LowMargin]->RealSize.X;
+		}
+
+		if(InitialHalls[HighMargin])
+		{
+			InitialHalls[HighMargin]->RealOffset = InitialHalls[Stairs]->RealOffset;
+			InitialHalls[HighMargin]->RealOffset.X += InitialBlocks[Stairs]->RealSize.X;
+		}
+
+		//Apartments offset
+		const float CenterWidth = RealSize.X
+			- (InitialBlocks[LowWing]		? InitialBlocks[LowWing]->RealSize.X		: 0.f)
+			- (InitialBlocks[HighWing]		? InitialBlocks[HighWing]->RealSize.X		: 0.f)
+			- (InitialHalls[LowCorridor]	? InitialHalls[LowCorridor]->RealSize.X		: 0.f)
+			- (InitialHalls[HighCorridor]	? InitialHalls[HighCorridor]->RealSize.X	: 0.f);
+
+		if(InitialBlocks[LowApartment])
+		{
+			InitialBlocks[LowApartment]->RealOffset.Y = RealOffset.Y;
+			
+			InitialBlocks[LowApartment]->RealOffset.X = RealOffset.X
+				+ (InitialBlocks[LowWing]		? InitialBlocks[LowWing]->RealOffset.X		: 0.f)
+				+ (InitialHalls[LowCorridor]	? InitialHalls[LowCorridor]->RealOffset.X	: 0.f);
+			InitialBlocks[LowApartment]->RealOffset.X += (CenterWidth - InitialBlocks[LowApartment]->RealSize.X) / 2.f;
+		}
+
+		if(InitialBlocks[HighApartment])
+		{
+			InitialBlocks[HighApartment]->RealOffset.Y = RealOffset.Y + RealSize.Y
+				- InitialBlocks[HighApartment]->RealSize.Y;
+			
+			InitialBlocks[HighApartment]->RealOffset.X = RealOffset.X
+				+ (InitialBlocks[LowWing]		? InitialBlocks[LowWing]->RealOffset.X		: 0.f)
+				+ (InitialHalls[LowCorridor]	? InitialHalls[LowCorridor]->RealOffset.X	: 0.f);
+			InitialBlocks[HighApartment]->RealOffset.X += (CenterWidth - InitialBlocks[HighApartment]->RealSize.X) / 2.f;
+		}
+	}
+	else
+	{
+		//Corridors and wings offset (use this offset)
+		if(InitialBlocks[LowWing])
+		{
+			InitialBlocks[LowWing]->RealOffset = RealOffset;
+			InitialBlocks[LowWing]->RealOffset.X += (RealSize.X - InitialBlocks[LowWing]->RealSize.X) / 2.f;
+			
+			InitialHalls[LowCorridor]->RealOffset.Y = LevelOffset.Y + InitialBlocks[LowWing]->Size.Y;
+			InitialHalls[LowCorridor]->RealOffset.X = RealOffset.X;
+		}
+
+		if(InitialBlocks[HighWing])
+		{
+			InitialBlocks[HighWing]->RealOffset = RealOffset;
+			InitialBlocks[HighWing]->RealOffset.Y += RealSize.Y - InitialBlocks[HighWing]->RealSize.Y;
+			InitialBlocks[HighWing]->RealOffset.X += (RealSize.X - InitialBlocks[LowWing]->RealSize.X) / 2.f;
+			
+			InitialHalls[HighCorridor]->RealOffset.Y = InitialBlocks[HighWing]->RealOffset.Y
+				- BuildingCst.WallWidth
+				- InitialHalls[HighCorridor]->RealSize.Y;
+			InitialHalls[HighCorridor]->RealOffset.X = RealOffset.X;
+		}
+
+		//Margin and stairs offset (use stairs offset)
+		InitialHalls[Stairs]->RealOffset += LevelOffset;
+
+		if(InitialHalls[LowMargin])
+		{
+			InitialHalls[LowMargin]->RealOffset = InitialHalls[Stairs]->RealOffset;
+			InitialHalls[LowMargin]->RealOffset.Y -= InitialBlocks[LowMargin]->RealSize.Y;
+		}
+
+		if(InitialHalls[HighMargin])
+		{
+			InitialHalls[HighMargin]->RealOffset = InitialHalls[Stairs]->RealOffset;
+			InitialHalls[HighMargin]->RealOffset.Y += InitialBlocks[Stairs]->RealSize.Y;
+		}
+
+		//Apartments offset
+		const float CenterWidth = RealSize.Y
+			- (InitialBlocks[LowWing]		? InitialBlocks[LowWing]->RealSize.Y		: 0.f)
+			- (InitialBlocks[HighWing]		? InitialBlocks[HighWing]->RealSize.Y		: 0.f)
+			- (InitialHalls[LowCorridor]	? InitialHalls[LowCorridor]->RealSize.Y		: 0.f)
+			- (InitialHalls[HighCorridor]	? InitialHalls[HighCorridor]->RealSize.Y	: 0.f);
+
+		if(InitialBlocks[LowApartment])
+		{
+			InitialBlocks[LowApartment]->RealOffset.X = RealOffset.X;
+			
+			InitialBlocks[LowApartment]->RealOffset.Y = RealOffset.Y
+				+ (InitialBlocks[LowWing]		? InitialBlocks[LowWing]->RealOffset.Y		: 0.f)
+				+ (InitialHalls[LowCorridor]	? InitialHalls[LowCorridor]->RealOffset.Y	: 0.f);
+			InitialBlocks[LowApartment]->RealOffset.Y += (CenterWidth - InitialBlocks[LowApartment]->RealSize.Y) / 2.f;
+		}
+
+		if(InitialBlocks[HighApartment])
+		{
+			InitialBlocks[HighApartment]->RealOffset.X = RealOffset.X + RealSize.X
+				- InitialBlocks[HighApartment]->RealSize.X;
+			
+			InitialBlocks[HighApartment]->RealOffset.Y = RealOffset.Y
+				+ (InitialBlocks[LowWing]		? InitialBlocks[LowWing]->RealOffset.Y		: 0.f)
+				+ (InitialHalls[LowCorridor]	? InitialHalls[LowCorridor]->RealOffset.Y	: 0.f);
+			InitialBlocks[HighApartment]->RealOffset.Y += (CenterWidth - InitialBlocks[HighApartment]->RealSize.Y) / 2.f;
+		}		
+	}
+
+	for(int i = 0; i < BlockPositionsSize; ++i)
+	{
+		const bool High = i == HighApartment || i == HighWing;
+		if (InitialBlocks[i] != nullptr)
+			InitialBlocks[i]->ComputeRealOffsetRecursive(BuildingCst, RoomDivisionCst, High);
+	}
+}
+
+const FVector2D& FLevelOrganisation::GetStairsRealOffset() const
+{
+	check(InitialHalls[Stairs] != nullptr);
+	return InitialHalls[Stairs]->GetRealOffset();
+}
+
+const TArray<FUnknownBlock*>& FLevelOrganisation::GetBlockList() const
+{
+	return InitialBlocks;
+}
+
+const TArray<FHallBlock*>& FLevelOrganisation::GetHallList() const
+{
+	return InitialHalls;
 }

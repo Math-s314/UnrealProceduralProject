@@ -2,6 +2,7 @@
 
 
 #include "FurnitureMeshAsset.h"
+#include "HomeGenerator.h"
 
 bool FWallInteractionStruct::GetFirstAttractedWall(EGenerationAxe& First) const
 {
@@ -64,4 +65,10 @@ bool FWallInteractionStruct::GetSecondAttractedWall(EGenerationAxe& Second) cons
 		default:
 			return false;
 	}
+}
+
+int UFurnitureMeshAsset::GetArea(const FFurniture& CorrespondingFurniture) const
+{
+	const FFurnitureConstraint &Constraints = bOverrideConstraint ? ConstraintsOverride : CorrespondingFurniture.DefaultConstraints;
+	return (GridSize.X + Constraints.Margin.XDown + Constraints.Margin.XUp) * (GridSize.Y + Constraints.Margin.YDown + Constraints.Margin.YUp);
 }

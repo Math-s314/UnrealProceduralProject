@@ -6,21 +6,36 @@
 #include "CoreMinimal.h"
 #include "FurnitureMeshAsset.h"
 
-//TODO : Think to a better organisation of the internal structs files (HGInternalStruct and HGBasicStruct)
+//ENH : Think to a better organisation of the internal structs files (HGInternalStruct and HGBasicStruct)
 
 //Home generator serialised structures
 struct FBuildingConstraint;
 struct FRoomsDivisionConstraints;
 struct FWindow;
 
+//Local structures
+struct FRoomBlock;
+struct FUnknownBlock;
+struct FLevelOrganisation;
+
 struct FBasicBlock
 {
-	FBasicBlock();
+	FBasicBlock() = default;
 	FBasicBlock(const FVectorGrid &_Size, const FVectorGrid &_GlobalPosition, int _Level);
 
+	//Basic grid data
 	FVectorGrid Size;
 	FVectorGrid GlobalPosition;
-	int Level;//Starts at 0
+	int Level = 0;//Starts at 0
+
+	//Geters
+	const FVector2D& GetRealSize() const;
+	const FVector2D& GetRealOffset() const;
+	
+protected:
+	//Advance grid data (taking in account the walls)
+	FVector2D RealSize;
+	FVector2D RealOffset; //Start from origin (not from grid location)
 };
 
 //In degrees
@@ -42,10 +57,10 @@ enum class ERoomCellType : uint8
 struct FRoomCell
 {
 	//When created a cell is empty
-	FRoomCell();
+	FRoomCell() = default;
 	
-	ERoomCellType Type;
-	uint32 FurnitureDependencyMarker;
+	ERoomCellType Type = ERoomCellType::EMPTY;
+	uint32 FurnitureDependencyMarker = 0;
 
 	static uint32 IndexToMarker(uint8 FurnitureIndex);
 };
@@ -53,11 +68,11 @@ struct FRoomCell
 struct FFurnitureRect
 {
 	//By default generate a vector null : (0°, 0, 0)
-	FFurnitureRect();
+	FFurnitureRect() = default;
 	FFurnitureRect(EFurnitureRotation _Rotation, const FVectorGrid &_Position, const FVectorGrid &_Size);
 
 	//Clock-wise rotation
-	EFurnitureRotation Rotation;
+	EFurnitureRotation Rotation = EFurnitureRotation::ROT0;
 	//Positions in grid starts at index 0
 	FVectorGrid Position;
 	//Non-rotated data
@@ -133,8 +148,6 @@ protected:
 	virtual void MarkRect(const FFurnitureRect &RotatedPosition, ERoomCellType CellType, uint8 DependencyMarker = 0);
 };
 
-struct FRoomBlock;
-
 struct FDoorBlock
 {
 	//Prevents from creating a door from nothing
@@ -181,8 +194,8 @@ protected:
 
 	//Position
 	const EGenerationAxe OpeningSide;
-	bool Placed;
-	FVectorGrid GlobalPosition;
+	bool Placed = false;
+	FVectorGrid GlobalPosition = FVectorGrid(-1, -1);
 
 	//In actual configuration, useless. however it allows multiple mesh for the doors in future system
 	UFurnitureMeshAsset * const DoorAsset;
@@ -200,28 +213,44 @@ struct FRoomBlock : FBasicBlock
 
 	//Comparison by minimal side to allow sorting
 	bool operator<(const FRoomBlock &B) const;
+
+	friend FUnknownBlock;
 };
 
 struct FDependencyBuffer
 {
+	FDependencyBuffer() = delete;
 	FDependencyBuffer(const TArray<FFurnitureDependency> &_Dependencies, const FFurnitureRect &_ParentPosition);
 	
 	const TArray<FFurnitureDependency> &Dependencies;
-	const FFurnitureRect ParentPosition;
+	const FFurnitureRect ParentPosition; //Can't be reference
 };
 
 /**
  * Structures used to divide a level into rooms.
  */
 
-struct LevelDivisionData
+struct FLevelDivisionData
 {
+	FLevelDivisionData() = delete;
+	FLevelDivisionData(int _LevelTotalArea, int _HallArea);
+	
 	//Total area occupied by the halls in the current level.
 	int HallTotalArea;
+
+	//Total area available in a level
+	const int LevelTotalArea;
+
+	//Returns HallTotalArea/LevelTotalArea (not int division)
+	float GetFutureHallRatio(int HallArea) const;
 
 	//Nothing else for instance...
 };
 
+/**
+ * Represents a hall : a space between rooms with special decoration
+ * Real sizes does not include wall (just a space), offsets starts at the interior of the block (inside the wall)
+ */
 struct FHallBlock : FBasicBlock
 {
 	FHallBlock()= default;
@@ -232,11 +261,18 @@ struct FHallBlock : FBasicBlock
 
 	//Choose, place and spawned the needed windows for this hall
 	void AddWindow();
+
+	friend FUnknownBlock;
+	friend FLevelOrganisation;
 };
 
+/**
+ * Represents a block being built : a "step" of the division of a level process
+ * Real sizes includes wall, offsets starts at the interior of the block (inside the wall)
+ */
 struct FUnknownBlock : FBasicBlock
 {
-	FUnknownBlock();
+	FUnknownBlock() = default;
 	FUnknownBlock(const FVectorGrid &_Size, const FVectorGrid &_GlobalPosition, int _Level, bool _AlongX);
 
 	enum class DivideMethod : uint8
@@ -247,29 +283,136 @@ struct FUnknownBlock : FBasicBlock
 		DIVISION	//The block must be divide using the division method (no hall creation).
 	};
 
+	///
+	///Division part
+	///
+
 	//Check if it is possible to divide this block and using which method (minimal side's size,...)
 	//Partially random (for the block that could be divide or stopped, depending on the wanted size)
-	DivideMethod ShouldDivide(const FRoomsDivisionConstraints &DivisionCst) const;//TODO : Need constraints and stats about the current floor
+	//If it decides to split, it updates automatically the FLevelDivisionData struct
+	DivideMethod ShouldDivide(const FRoomsDivisionConstraints &DivisionCst, FLevelDivisionData &DivisionData) const;
 
 	//Try to split the current block : create a hall in between the two new blocks.
-	//The current block become on of the two new created and the other one is returned.
-	bool BlockSplit(const FRoomsDivisionConstraints& DivisionCst, FUnknownBlock &SecondResultedBlock, FHallBlock &ResultHall);
-
+	//The current block is kept and the two created are returned.
+	bool BlockSplit(const FRoomsDivisionConstraints& DivisionCst, FUnknownBlock &FirstResultedBlock, FUnknownBlock &SecondResultedBlock, FHallBlock &ResultHall);
+	
 	//Try to make a division into the current block : no hall is created.
-	//The current block become on of the two new created and the other one is returned.
-	bool BlockDivision(const FRoomsDivisionConstraints& DivisionCst, FUnknownBlock &SecondResultedBlock);
+	//The current block is kept and the two created are returned.
+	bool BlockDivision(const FRoomsDivisionConstraints& DivisionCst,  FUnknownBlock &FirstResultedBlock, FUnknownBlock &SecondResultedBlock);
 
 	//Once this block is stopped by the system, it might be transformed to a room
-	void TransformToRoom(FRoomBlock &CreatedRoom) const;
+	void TransformToRoom(FRoomBlock &CreatedRoom);
 
+	///
+	///Calculation part
+	///
+
+	//Calculates the dimensions of this block using its child blocks
+	void ComputeRealSizeRecursive(const FBuildingConstraint &BuildingCst, const FRoomsDivisionConstraints &RoomDivisionCst); //Upward phase
+
+	//Generates the needed data to create walls (using previously calculated sizes)
+	//Thus are calculated : new offset for the rooms.
+	void ComputeRealOffsetRecursive(const FBuildingConstraint& BuildingCst, const FRoomsDivisionConstraints& RoomDivisionCst, const bool IsHighestAxe) const; //Downward phase
+	
 protected:
 	//Indicate along which axis we should divide (set by the previous block)
-	bool DivideAlongX;
+	bool DivideAlongX = true;
 	
 	//Is set to true when the block results of a division and not a split (no hall created)
 	//It means the block can't no more be divided using a split method but only with a division
-	bool NoMoreSplit;
+	bool NoMoreSplit = false;
 
 	//Used to ensure that the user of the class call the right method (error = no decision)
-	mutable DivideMethod DivideDecision;
+	mutable DivideMethod DivideDecision = DivideMethod::ERROR;
+
+	//Linked blocks
+	FUnknownBlock *Parent = nullptr;
+	FUnknownBlock *Child1 = nullptr;
+	FUnknownBlock *Child2 = nullptr;
+	FHallBlock *HallBlock = nullptr;
+	FRoomBlock *Room = nullptr; //Only for last blocks
+	//ENH : Maybe add an union
+
+	friend FLevelOrganisation;
+};
+
+struct FLevelOrganisation
+{
+	enum EInitialBlockPositions { LowWing, HighWing, LowApartment, HighApartment, BlockPositionsSize};
+	enum EInitialHallPositions { LowCorridor, HighCorridor, LowMargin, HighMargin, Stairs, HallPositionsSize};
+	
+	FLevelOrganisation();
+
+	///
+	///Lists management
+	///
+
+	//Setup the blocks
+	void SetUnknownBlock(EInitialBlockPositions Index, FUnknownBlock *Block);
+	void SetHallBlock(EInitialHallPositions Index, FHallBlock *Hall);
+
+	//Access to index, error is given by BlockPositionsSize or HallPositionsSize
+	EInitialBlockPositions GetUnknownBlockPosition(FUnknownBlock* Block) const;
+	EInitialHallPositions GetHallBlockPosition(FHallBlock* Hall) const;
+
+	//Access to list
+	const TArray<FUnknownBlock *> &GetBlockList() const;
+	const TArray<FHallBlock *> &GetHallList() const;
+
+	//Empties both list. The delete boolean indicates if we should delete the pointed instance (be careful !)
+	void Empty(bool bDelete = true);
+
+	///
+	///Data
+	///
+
+	//Returns the sum of the area of all initial halls (except stairs)
+	int InitialHallArea() const;
+
+	
+	///
+	///"Real" calculations
+	///
+	
+	//Computes all sizes of all linked blocks and hall of this level (included the LevelOrganisation in itself)
+	//Computes the offset of the stairs only
+	//Be careful these calculated value aren't absolute : they must be update according to the stairs of each level.
+	void ComputeBasicRealData(const FBuildingConstraint& BuildingCst, const FRoomsDivisionConstraints& RoomDivisionCst);
+
+	//Using the given additional offset, the function will update the stairs' and level's offset
+	//It will then calculate the offset for each block (and launch the recursive call)
+	void ComputeAllRealData(const FVector2D &LevelOffset ,const FBuildingConstraint& BuildingCst, const FRoomsDivisionConstraints& RoomDivisionCst);
+
+	//Returns the real offset of the Hall which represent the stairs
+	const FVector2D &GetStairsRealOffset() const;
+	
+protected:
+	//Real block data for this level
+	FVector2D RealOffset = FVector2D::UnitVector;
+	FVector2D RealSize = FVector2D::ZeroVector;
+
+	//Included blocks
+	TArray<FUnknownBlock *> InitialBlocks;
+	TArray<FHallBlock *> InitialHalls;
+	
+	///   _________________________________________
+	///  |          |   |           |   |         |
+	///  |          | 1 |     D     | 2 |         |
+	///  |          |   |___________|   |         |
+	///  |     A    |    3    5    4    |    B    |
+	///  |          |    ___________    |         |
+	///  |          |   |           |   |         |
+	///  |          | 1 |     C     | 2 |         |
+	///  |__________|___|___________|___|_________|
+	///
+	///  A : LowWing (lowest position) 
+	///  B : HighWing 
+	///  C : LowApartment (lowest position on the other axis)
+	///  D : HighApartment
+	///
+	///  1 : LowCorridor
+	///  2 : HighCorridor
+	///  3 : LowMargin
+	///  4 : HighMargin
+	///  5 : Stairs
 };

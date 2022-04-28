@@ -12,6 +12,7 @@
 
 /**
  * Groups all the information needed to define the global building shape.
+ * The constraints indicated in this structure are not absolute : they will be ignored if some other calculated value over-constraint the calculus.
  */
 USTRUCT(BlueprintType)
 struct FBuildingConstraint
@@ -23,39 +24,51 @@ struct FBuildingConstraint
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	float GridSnapLength;
 
-	//Maximal number of floors in the generated building
-	//In grid square
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
-	int MaxFloorsNumber;
-
-	//Minimal number of floors in the generated building
-	//In grid square
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
-	int MinFloorsNumber;
-
 	//Minimal size of the side of a floor
+	//If set to 0 won't be taken in account
 	//In grid square
-	//TODO : Can be set but must be superior to another calculated value
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
-	int MinSideFloorLength;
+	int MinSideFloorLength = 0;
+
+	//Maximal size of the side of a floor
+	//ENH : If set to 0 won't be taken in account
+	//In grid square
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	int MaxSideFloorLength = 0;
+
+	//Maximal number of floors in the generated building
+	//If set to 0 won't be taken in account
+	//In grid square
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	int MaxFloorsNumber = 0;
 
 	//Ground thickness of one floor
 	//In UE unit
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
-	float FloorWidth;
+	float FloorWidth = 10.f;
 
 	//Height between the floor and the ceiling of a room. The total height between two floors is thus : FloorWidth + FloorHight
 	//In UE unit
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
-	float FloorHeight;
+	float FloorHeight = 240.f;
 
 	//Walls thickness
 	//In UE unit
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
-	float WallWidth;
+	float WallWidth = 10.f;
 
 protected://Generated data by the procedural generator
+	//Room average minimal side : an average of all minimal side (for each room) pondered by the quantity these rooms
+	int AverageSide = 0;
 
+	//Total desired quantity of rooms, according to the number per inhabitant and the number of inhabitants.
+	int NormalRoomQuantity = 0;
+	
+	//Building dimensions
+	FVectorGrid BuildingSize; //In grid square
+	int Levels = 0;
+
+	friend class AHomeGenerator;
 };
 
 /**
@@ -66,52 +79,51 @@ USTRUCT(BlueprintType)
 struct FRoomsDivisionConstraints
 {
 	GENERATED_BODY()
-	
-	FRoomsDivisionConstraints();
+	FRoomsDivisionConstraints() = default;
 
 	//Wanted width of a hall (corridor between rooms in a floor)
 	//In grid square
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
-	int HallWidth;
+	int HallWidth = 0;
 
 	//Maximum ration of the surface occupied by the halls on the total area.
 	//In percent : ]0; 1[
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(DisplayName="MinimalSideCoefficient", ClampMin="0.0", ClampMax="1.0"))
-	float MaxHallRatio;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(DisplayName="MinimalSideCoefficient", ClampMin="0.0", ClampMax="0.6"))
+	float MaxHallRatio = 0.4f;
 
-	//Defines the absolute minimal side : any room can have a side under this.
-	//ABSMinSide = MinSideCoef * CalcMinimalSide
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(DisplayName="MinimalSideCoefficient", ClampMin="1.0"))
-	float MinSideCoef;
+	//Defines the absolute minimal side : any room can have a side under this (be careful if you choose a value under 1)
+	//ABSMinimalSide = MinSideCoef * BasicMinimalSide
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(DisplayName="MinimalSideCoefficient", ClampMin="0.0"))
+	float MinSideCoef = 1.f;
 
 	//Defines the stop split side : any room with a side under this can't be split, only divided
-	//StopSplitSide = StopSplitCoef * CalcMinimalSide
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(DisplayName="StopSplitCoefficient", ClampMin="1.0"))
-	float StopSplitCoef;
+	//StopSplitSide = StopSplitCoef * BasicAverageSide
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(DisplayName="StopSplitCoefficient", ClampMin="0.0"))
+	float StopSplitCoef = 1.f;
 
-	//Defines the sufficient side : any room with a side above this must be split or divided
-	//SufficientSide = SufficientChunkCoef * CalcMinimalSide
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(DisplayName="SufficientChunkCoefficient", ClampMin="2.0"))
-	float SufficientChunkCoef;
+	//Defines the sufficient side : any room with a side above this must be split or divided (under it is random)
+	//SufficientSide = SufficientChunkCoef * BasicMaximalSide
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(DisplayName="SufficientChunkCoefficient", ClampMin="0.0"))
+	float SufficientChunkCoef = 1.f;
 
 	//When the side of a block is under the sufficient side, it gives us the probability to continue to divide.
 	//In percent : [0; 1]
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(DisplayName="OverDivideProbability", ClampMin="0.0", ClampMax="1.0"))
-	float OverDivideProba;
+	float OverDivideProba = 0.5f;
 	
 protected://Generated data by the procedural generator
-	//Calculated minimal side from the rooms information
-	int BasicMinimalSide;
-
 	//Absolute minimal side
-	int ABSMinimalSide;
+	int ABSMinimalSide = 0;
 
 	//Side under which the split will be stopped
-	int StopSplitSide;
+	int StopSplitSide = 0;
 
 	//Sufficient side
-	int SufficientSide;
+	int SufficientSide = 0;
 
+	//Computes previously indicated calculus
+	void CalculateAllSides(const int _BasicMinimalSide, const int _BasicAverageSide, const int _BasicMaximalSide);
+	
 	friend class AHomeGenerator;
 	friend struct FUnknownBlock;
 };
@@ -124,7 +136,7 @@ struct FRoom
 {
 	GENERATED_BODY()
 
-	FRoom() : NumPerHab(1.f), MinRoomSide(0) {}
+	FRoom() = default;
 
 	//Ordered list of all furniture which may be placed in this room's type : the furniture with the lowest index will be the first to be placed (more chances to success)
 	//Must be seen as a priority list of the furniture (the more important furniture have to be placed in first)
@@ -137,14 +149,18 @@ struct FRoom
 
 	//Indicates the number of times per inhabitant that the "room" should be created, floating value allows more progressive augmentation (like for kitchen : 1 for 3 to 6 hab. and 2 for 8)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(DisplayName="NumberPerInhabitant", ClampMin="0.0", ClampMax="5.0"))
-	float NumPerHab;
+	float NumPerHab = 1.f;
+
+	//Recalculate MinRoomSide
+	int CalculateMinimalSide(TMap<FName, FFurniture> &FurnitureMapping);
 
 	//Getter to MinRoomSide
 	int GetMinimalSide() const;
 
 protected:
 	//Computed value which depends on the selected furniture (in Furniture)
-	int MinRoomSide;
+	//For one room
+	int MinRoomSide = 0;
 };
 
 /**
@@ -168,6 +184,12 @@ struct FFurniture
 	//Default constraints for this furniture which will be applied to the mesh if they don't override it.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	FFurnitureConstraint DefaultConstraints;
+
+	//Indicates the average area of all its meshes
+	int GetAverageArea();
+
+protected:
+	int AverageArea = 0;
 };
 
 /**
@@ -196,13 +218,11 @@ class HOMEGENERATION_API AHomeGenerator : public AActor
 {
 	GENERATED_BODY()
 	//TODO : Add categories !!
-	//TODO : Instead of using assert, launch exceptions (avoid editor crashes)
+	//ENH : Instead of using assert, launch exceptions (avoid editor crashes) or at least UE_CHECK 
 
 public:
 	// Sets default values for this actor's properties
 	AHomeGenerator();
-
-	//TODO : The input data must be public or protected ?
 
 	//Number of inhabitants which should live in this home (it's mainly a size's indicator)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(ClampMin="1.0"))
@@ -212,19 +232,20 @@ public:
 	///Building data
 	///
 
-	//TODO : Comment
+	//Groups all needed data on the general building shape
+	//A part is set by the user and the other is calculated
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	FBuildingConstraint BuildingConstraints;
 	
-	//TODO : Comment
+	//Special furniture structure which represents the stairs (shouldn't be added in the normal furniture map).
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	FFurniture Stairs;
 
-	//TODO : Comment
+	//Special furniture structure which represents the doors (shouldn't be added in the normal furniture map).
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	FFurniture Doors;
 
-	//TODO : Comment
+	//Special furniture structure which represents the windows (shouldn't be added in the normal furniture map).
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	FWindow Windows;
 
@@ -232,11 +253,13 @@ public:
 	///Room data
 	///
 
-	//TODO : Comment
+	//List of all room type represented by their name.
+	//A room type is defined by the type of furniture it contains, its decoration, and its occupation the building.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	TMap<FName, FRoom> Rooms;
 
-	//TODO : Comment
+	//Groups all needed data to be able to divide and allocate the space in the building for each needed room.
+	//A part is set by the user and the other is calculated.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	FRoomsDivisionConstraints RoomsDivisionConstraints;
 
@@ -244,11 +267,13 @@ public:
 	///Furniture
 	///
 
-	//TODO : Comment
+	//List of all furniture type represented by their name.
+	//A furniture type is defined by all the meshes by which it can be represented, its dependencies and its constraints.
+	//The dependencies of a furniture are the some indicated furniture type the system will try to place near this furniture.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	TMap<FName, FFurniture> Furniture;
 
-	//TODO: Add advanced furniture positioning parameter (wall handling, bounds threshold and completion)
+	//ENH: Add advanced furniture positioning parameter (bounds threshold and completion)
 
 protected:
 	// Called when the game starts or when spawned
@@ -263,12 +288,11 @@ protected:
 	//Function to use really carefully : it takes a lot of time.
 	void ComputeBounds();
 
-	//Compute all minimal side and define sort element based on this value (ex : rooms)
+	//Computes all minimal sides and sort elements based on this value (ex : rooms)
+	//Also computes additional room's constants
 	void ComputeSides();
 
-	//Generated data is stored in the RoomsDivisionConstraintStruct
-	//Desired quantity of rooms, according to the number per inhabitant and the number of inhabitants.
-	int NormalRoomQuantity;
+	//Generated data is stored in the RoomsDivisionConstraintStruct or in BuildingConstraintStruct
 
 	///______________________
 	///Array helper
@@ -290,9 +314,7 @@ protected:
 	///Building Step
 	///
 
-	//Generated dimensions of the building
-	FVectorGrid BuildingSize;
-	int Levels;
+	virtual void DefineBuilding();
 
 	//Selected furniture (stairs, windows and doors)
 	UPROPERTY() UFurnitureMeshAsset *SelectedStair;
@@ -307,11 +329,14 @@ protected:
 
 	//Defines the position of the stairs and the first halls (stairs must be connected to at least one hall)
 	//These position are used by all levels
-	virtual void StairsPositioning(TArray<FUnknownBlock> & InitialBlocks, TArray<FHallBlock> &InitialHalls);
+	virtual void StairsPositioning(FLevelOrganisation &InitialOrganisation);
 	
-	//TODO: When creating caller function, check the best way to pass the argument
 	//Divide given level into a list of room and halls
-	virtual void DivideSurface(int Level, const TArray<FUnknownBlock> &InitialBlocks, const TArray<FHallBlock> &InitialHalls);
+	virtual void DivideSurface(const int Level, FLevelOrganisation& LevelOrganisation, TDoubleLinkedList<FUnknownBlock>& NodesToDelete);
+
+	//Computes for each block (room, level, ...) their real offset.
+	//This offset take in account the walls : in the grid system they don't have any width.
+	virtual void ComputeWallEffect(TArray<FLevelOrganisation> &LevelsOrganisation);
 
 	//Called when all levels have been divided to define the type for each room block created.
 	//Acts globally on all levels simultaneously
@@ -319,7 +344,11 @@ protected:
 
 	//TODO : Remove wall
 	//TODO : Add windows and decoration
-	virtual void CompleteHallSurface(); //31/12/2021 : No fucking idea how to do this shit
+	virtual void CompleteHallSurface();
+
+	//31/12/2021 : No fucking idea how to do this shit
+	//01/02/2022 Lol, progress : 0%
+	//05/02/2022 : Easy : just add placo around rooms : really thick walls just for deco, rest of walls will be empty, same for floor and ceil.
 
 	//All halls in the building by level (first index)
 	TArray<TArray<FHallBlock>> HallBlocks;
@@ -327,8 +356,8 @@ protected:
 	//All rooms in the building by level (first index)
 	TArray<TArray<FRoomBlock>> RoomBlocks;
 
-	//TODO : Missing step where we define the door furniture and connect the doors between each other
-	//TODO : Missing step where we generate the wall/floor
+	//TODO : Missing step where connect the doors between each other
+	//TODO : Missing step where we generate the wall/floor -> done for each room
 	
 	///______________________
 	///Furniture Step
