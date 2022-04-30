@@ -3,7 +3,6 @@
 
 #include "HomeGenerator.h"
 #include "Engine/StaticMeshActor.h"
-#include <assert.h>
 
 void FRoomsDivisionConstraints::CalculateAllSides(const int _BasicMinimalSide, const int _BasicAverageSide, const int _BasicMaximalSide)
 {
@@ -237,7 +236,7 @@ void AHomeGenerator::StairsPositioning(FLevelOrganisation &InitialOrganisation)
 						0
 					));
 
-					//ENH : The code in the center case could replace all other cases (just if we check X > 0 for all X calculated value)					
+					//ENH : The code in the center case could replace all other cases (just if we check X > 0 for all X calculated value)			
 					//We could so split the part check if possible and spawn the hall/blocks
 					//Case where it is in center of the room
 					if(IsInXCenter() && IsInYCenter())
@@ -292,7 +291,9 @@ void AHomeGenerator::StairsPositioning(FLevelOrganisation &InitialOrganisation)
 									FVectorGrid(FHAxis, LevelGrid.GetSizeY()),
 									FVectorGrid(0, 0),
 									0,
-									false
+									false,
+									static_cast<uint8>(EGenerationAxe::X_UP),
+									EGenerationAxe::X_UP
 							));
 
 							InitialOrganisation.SetUnknownBlock(
@@ -301,7 +302,9 @@ void AHomeGenerator::StairsPositioning(FLevelOrganisation &InitialOrganisation)
 								FVectorGrid(LevelGrid.GetSizeX() - (SHAxis + RoomsDivisionConstraints.HallWidth), LevelGrid.GetSizeY()),
 								FVectorGrid(SHAxis + RoomsDivisionConstraints.HallWidth, 0),
 								0,
-								false
+								false,
+								static_cast<uint8>(EGenerationAxe::X_DOWN),
+								EGenerationAxe::X_DOWN
 							));
 
 							InitialOrganisation.SetUnknownBlock(
@@ -310,7 +313,9 @@ void AHomeGenerator::StairsPositioning(FLevelOrganisation &InitialOrganisation)
 									FVectorGrid(SHAxis - (FHAxis + RoomsDivisionConstraints.HallWidth), FinalRect.Position.Y),
 									FVectorGrid(SHAxis + RoomsDivisionConstraints.HallWidth, 0),
 									0,
-									false
+									false,
+									EGenerationAxe::X_DOWN | EGenerationAxe::X_UP | EGenerationAxe::Y_UP,
+									EGenerationAxe::X_DOWN
 							));
 
 							InitialOrganisation.SetUnknownBlock(
@@ -319,7 +324,9 @@ void AHomeGenerator::StairsPositioning(FLevelOrganisation &InitialOrganisation)
 									FVectorGrid(SHAxis - (FHAxis + RoomsDivisionConstraints.HallWidth), LevelGrid.GetSizeY() - (FinalRect.Position.Y + RotatedSize.Y)),
 									FVectorGrid(FHAxis + RoomsDivisionConstraints.HallWidth, FinalRect.Position.Y + RotatedSize.Y),
 									0,
-									false
+									false,
+									EGenerationAxe::X_DOWN | EGenerationAxe::X_UP | EGenerationAxe::Y_DOWN,
+									EGenerationAxe::X_UP
 							));
 						}
 						else
@@ -372,7 +379,9 @@ void AHomeGenerator::StairsPositioning(FLevelOrganisation &InitialOrganisation)
 									FVectorGrid(LevelGrid.GetSizeX(), FHAxis),
 									FVectorGrid(0, 0),
 									0,
-									true
+									true,
+									static_cast<uint8>(EGenerationAxe::Y_UP),
+									EGenerationAxe::Y_UP
 							));
 
 							InitialOrganisation.SetUnknownBlock(
@@ -381,7 +390,9 @@ void AHomeGenerator::StairsPositioning(FLevelOrganisation &InitialOrganisation)
 									FVectorGrid(LevelGrid.GetSizeX(), LevelGrid.GetSizeY() - (SHAxis + RoomsDivisionConstraints.HallWidth)),
 									FVectorGrid(0, SHAxis + RoomsDivisionConstraints.HallWidth),
 									0,
-									true
+									true,
+									static_cast<uint8>(EGenerationAxe::Y_DOWN),
+									EGenerationAxe::Y_DOWN
 							));
 
 							InitialOrganisation.SetUnknownBlock(
@@ -390,7 +401,9 @@ void AHomeGenerator::StairsPositioning(FLevelOrganisation &InitialOrganisation)
 									FVectorGrid(FinalRect.Position.X, SHAxis - (FHAxis + RoomsDivisionConstraints.HallWidth)),
 									FVectorGrid(0, SHAxis + RoomsDivisionConstraints.HallWidth),
 									0,
-									true
+									true,
+									EGenerationAxe::Y_DOWN | EGenerationAxe::Y_UP | EGenerationAxe::X_UP,
+									EGenerationAxe::Y_DOWN
 							));
 
 							InitialOrganisation.SetUnknownBlock(
@@ -399,7 +412,9 @@ void AHomeGenerator::StairsPositioning(FLevelOrganisation &InitialOrganisation)
 									FVectorGrid(LevelGrid.GetSizeX() - (FinalRect.Position.X + RotatedSize.X), SHAxis - (FHAxis + RoomsDivisionConstraints.HallWidth)),
 									FVectorGrid(FinalRect.Position.X + RotatedSize.X, FHAxis + RoomsDivisionConstraints.HallWidth),
 									0,
-									true
+									true,
+									EGenerationAxe::Y_DOWN | EGenerationAxe::Y_UP | EGenerationAxe::X_DOWN,
+									EGenerationAxe::Y_UP
 							));
 						}
 					}
@@ -436,7 +451,9 @@ void AHomeGenerator::StairsPositioning(FLevelOrganisation &InitialOrganisation)
 									FVectorGrid(FinalRect.Position.X  - Space - RoomsDivisionConstraints.HallWidth, LevelGrid.GetSizeY()),
 									FVectorGrid(0, 0),
 									0,
-									false
+									false,
+									static_cast<uint8>(EGenerationAxe::X_UP),
+									EGenerationAxe::X_UP
 							));
 							
 							InitialOrganisation.SetUnknownBlock(
@@ -445,7 +462,9 @@ void AHomeGenerator::StairsPositioning(FLevelOrganisation &InitialOrganisation)
 									FVectorGrid(RotatedSize.X  + Space, FinalRect.Position.Y),
 									FVectorGrid(FinalRect.Position.X  - Space, 0),
 									0,
-									false
+									false,
+									EGenerationAxe::X_DOWN | EGenerationAxe::Y_UP,
+									EGenerationAxe::X_DOWN
 							));
 
 							InitialOrganisation.SetUnknownBlock(
@@ -454,7 +473,9 @@ void AHomeGenerator::StairsPositioning(FLevelOrganisation &InitialOrganisation)
 									FVectorGrid(RotatedSize.X  + Space, LevelGrid.GetSizeY() - (FinalRect.Position.Y + RotatedSize.Y)),
 									FVectorGrid(FinalRect.Position.X  - Space, FinalRect.Position.Y + RotatedSize.Y),
 									0,
-									false
+									false,
+									EGenerationAxe::X_DOWN | EGenerationAxe::Y_DOWN,
+									EGenerationAxe::X_DOWN
 							));
 						}
 						else
@@ -483,7 +504,9 @@ void AHomeGenerator::StairsPositioning(FLevelOrganisation &InitialOrganisation)
 									FVectorGrid(LevelGrid.GetSizeX() - (RotatedSize.X + Space + RoomsDivisionConstraints.HallWidth), LevelGrid.GetSizeY()),
 									FVectorGrid(RotatedSize.X + Space + RoomsDivisionConstraints.HallWidth, 0),
 									0,
-									false
+									false,
+									static_cast<uint8>(EGenerationAxe::X_DOWN),
+									EGenerationAxe::X_DOWN
 							));
 
 							InitialOrganisation.SetUnknownBlock(
@@ -492,7 +515,9 @@ void AHomeGenerator::StairsPositioning(FLevelOrganisation &InitialOrganisation)
 									FVectorGrid(RotatedSize.X  + Space, FinalRect.Position.X),
 									FVectorGrid(0, 0),
 									0,
-									false
+									false,
+									EGenerationAxe::X_UP | EGenerationAxe::Y_UP,
+									EGenerationAxe::X_UP
 							));
 
 							InitialOrganisation.SetUnknownBlock(
@@ -501,7 +526,9 @@ void AHomeGenerator::StairsPositioning(FLevelOrganisation &InitialOrganisation)
 									FVectorGrid(RotatedSize.X  + Space, LevelGrid.GetSizeY() - (FinalRect.Position.Y + RotatedSize.Y)),
 									FVectorGrid(0, FinalRect.Position.Y + RotatedSize.Y),
 									0,
-									false
+									false,
+									EGenerationAxe::X_UP | EGenerationAxe::Y_DOWN,
+									EGenerationAxe::X_UP
 							));
 						}
 					}
@@ -538,7 +565,9 @@ void AHomeGenerator::StairsPositioning(FLevelOrganisation &InitialOrganisation)
 									FVectorGrid(LevelGrid.GetSizeX(), FinalRect.Position.Y  - Space - RoomsDivisionConstraints.HallWidth),
 									FVectorGrid(0, 0),
 									0,
-									true
+									true,
+									static_cast<uint8>(EGenerationAxe::Y_UP),
+									EGenerationAxe::Y_UP
 							));
 
 							InitialOrganisation.SetUnknownBlock(
@@ -547,7 +576,9 @@ void AHomeGenerator::StairsPositioning(FLevelOrganisation &InitialOrganisation)
 									FVectorGrid(FinalRect.Position.X, RotatedSize.Y  + Space),
 									FVectorGrid(0, FinalRect.Position.Y  - Space),
 									0,
-									true
+									true,
+									EGenerationAxe::Y_DOWN | EGenerationAxe::X_UP,
+									EGenerationAxe::Y_DOWN
 							));
 							
 							InitialOrganisation.SetUnknownBlock(
@@ -556,7 +587,9 @@ void AHomeGenerator::StairsPositioning(FLevelOrganisation &InitialOrganisation)
 									FVectorGrid(LevelGrid.GetSizeX() - (FinalRect.Position.X + RotatedSize.X), RotatedSize.Y  + Space),
 									FVectorGrid(FinalRect.Position.X + RotatedSize.X, FinalRect.Position.Y  - Space),
 									0,
-									true
+									true,
+									EGenerationAxe::Y_DOWN | EGenerationAxe::X_DOWN,
+									EGenerationAxe::Y_DOWN
 							));
 						}
 						else
@@ -585,7 +618,9 @@ void AHomeGenerator::StairsPositioning(FLevelOrganisation &InitialOrganisation)
 									FVectorGrid(LevelGrid.GetSizeX(),LevelGrid.GetSizeY() - (RotatedSize.Y + Space + RoomsDivisionConstraints.HallWidth)),
 									FVectorGrid(0, RotatedSize.Y + Space + RoomsDivisionConstraints.HallWidth),
 									0,
-									true
+									true,
+									static_cast<uint8>(EGenerationAxe::Y_DOWN),
+									EGenerationAxe::Y_DOWN
 							));
 
 							InitialOrganisation.SetUnknownBlock(
@@ -594,7 +629,9 @@ void AHomeGenerator::StairsPositioning(FLevelOrganisation &InitialOrganisation)
 									FVectorGrid(FinalRect.Position.X, RotatedSize.Y  + Space),
 									FVectorGrid(0, 0),
 									0,
-									true
+									true,
+									EGenerationAxe::Y_UP | EGenerationAxe::X_UP,
+									EGenerationAxe::Y_UP
 							));
 
 							InitialOrganisation.SetUnknownBlock(
@@ -603,7 +640,9 @@ void AHomeGenerator::StairsPositioning(FLevelOrganisation &InitialOrganisation)
 									FVectorGrid(LevelGrid.GetSizeX() - (FinalRect.Position.X + RotatedSize.X), RotatedSize.Y  + Space),
 									FVectorGrid(FinalRect.Position.X + RotatedSize.X, 0),
 									0,
-									true
+									true,
+									EGenerationAxe::Y_UP | EGenerationAxe::X_DOWN,
+									EGenerationAxe::Y_UP
 							));
 						}
 					}
@@ -639,7 +678,9 @@ void AHomeGenerator::StairsPositioning(FLevelOrganisation &InitialOrganisation)
 										FVectorGrid(FinalRect.Position.X  - Space - RoomsDivisionConstraints.HallWidth, LevelGrid.GetSizeY()),
 										FVectorGrid(0, 0),
 										0,
-										false
+										false,
+										static_cast<uint8>(EGenerationAxe::X_UP),
+										EGenerationAxe::X_UP
 								));
 
 								if(LevelGrid.IsAlongYDownWall(FinalRect))
@@ -649,7 +690,9 @@ void AHomeGenerator::StairsPositioning(FLevelOrganisation &InitialOrganisation)
 											FVectorGrid(RotatedSize.X  + Space, LevelGrid.GetSizeY() - RotatedSize.Y),
 											FVectorGrid(FinalRect.Position.X  - Space,  RotatedSize.Y),
 											0,
-											false
+											false,
+											EGenerationAxe::X_DOWN | EGenerationAxe::Y_DOWN,
+											EGenerationAxe::X_DOWN
 									));
 								else
 									InitialOrganisation.SetUnknownBlock(
@@ -658,7 +701,9 @@ void AHomeGenerator::StairsPositioning(FLevelOrganisation &InitialOrganisation)
 											FVectorGrid(RotatedSize.X  + Space, LevelGrid.GetSizeY() - RotatedSize.Y),
 											FVectorGrid(FinalRect.Position.X  - Space, 0),
 											0,
-											false
+											false,
+											EGenerationAxe::X_DOWN | EGenerationAxe::Y_UP,
+											EGenerationAxe::X_DOWN
 									));
 							}
 							else //Along XDown so Position.X = 0
@@ -687,7 +732,9 @@ void AHomeGenerator::StairsPositioning(FLevelOrganisation &InitialOrganisation)
 										FVectorGrid(LevelGrid.GetSizeX() - (RotatedSize.X + Space + RoomsDivisionConstraints.HallWidth), LevelGrid.GetSizeY()),
 										FVectorGrid(RotatedSize.X + Space + RoomsDivisionConstraints.HallWidth, 0),
 										0,
-										false
+										false,
+										static_cast<uint8>(EGenerationAxe::X_DOWN),
+										EGenerationAxe::X_DOWN
 								));
 
 								if(LevelGrid.IsAlongYDownWall(FinalRect))
@@ -697,7 +744,9 @@ void AHomeGenerator::StairsPositioning(FLevelOrganisation &InitialOrganisation)
 											FVectorGrid(RotatedSize.X  + Space, LevelGrid.GetSizeY() - RotatedSize.Y),
 											FVectorGrid(0, RotatedSize.Y),
 											0,
-											false
+											false,
+											EGenerationAxe::X_UP | EGenerationAxe::Y_DOWN,
+											EGenerationAxe::X_UP
 									));
 								else
 									InitialOrganisation.SetUnknownBlock(
@@ -706,7 +755,9 @@ void AHomeGenerator::StairsPositioning(FLevelOrganisation &InitialOrganisation)
 											FVectorGrid(RotatedSize.X  + Space, LevelGrid.GetSizeY() - RotatedSize.Y),
 											FVectorGrid(0, 0),
 											0,
-											false
+											false,
+											EGenerationAxe::X_UP | EGenerationAxe::Y_UP,
+											EGenerationAxe::X_UP
 									));
 							}
 						}
@@ -738,7 +789,9 @@ void AHomeGenerator::StairsPositioning(FLevelOrganisation &InitialOrganisation)
 										FVectorGrid(LevelGrid.GetSizeX(), FinalRect.Position.Y  - Space - RoomsDivisionConstraints.HallWidth),
 										FVectorGrid(0, 0),
 										0,
-										true
+										true,
+										static_cast<uint8>(EGenerationAxe::Y_UP),
+										EGenerationAxe::Y_UP
 								));
 								
 								if(LevelGrid.IsAlongXDownWall(FinalRect))
@@ -748,7 +801,9 @@ void AHomeGenerator::StairsPositioning(FLevelOrganisation &InitialOrganisation)
 											FVectorGrid(LevelGrid.GetSizeX() - RotatedSize.X, RotatedSize.Y  + Space),
 											FVectorGrid(RotatedSize.X, FinalRect.Position.Y  - Space),
 											0,
-											true
+											true,
+											EGenerationAxe::Y_DOWN | EGenerationAxe::X_DOWN,
+											EGenerationAxe::Y_DOWN
 									));
 								else
 									InitialOrganisation.SetUnknownBlock(
@@ -757,7 +812,9 @@ void AHomeGenerator::StairsPositioning(FLevelOrganisation &InitialOrganisation)
 											FVectorGrid(LevelGrid.GetSizeX() - RotatedSize.X, RotatedSize.Y  + Space),
 											FVectorGrid(0, FinalRect.Position.Y  - Space),
 											0,
-											true
+											true,
+											EGenerationAxe::Y_DOWN | EGenerationAxe::X_UP,
+											EGenerationAxe::Y_DOWN
 									));
 							}
 							else
@@ -786,7 +843,9 @@ void AHomeGenerator::StairsPositioning(FLevelOrganisation &InitialOrganisation)
 										FVectorGrid(LevelGrid.GetSizeX(),LevelGrid.GetSizeY() - (RotatedSize.Y + Space + RoomsDivisionConstraints.HallWidth)),
 										FVectorGrid(0, RotatedSize.Y + Space + RoomsDivisionConstraints.HallWidth),
 										0,
-										true
+										true,
+										static_cast<uint8>(EGenerationAxe::Y_DOWN),
+										EGenerationAxe::Y_DOWN
 								));
 
 								if(LevelGrid.IsAlongXDownWall(FinalRect))
@@ -796,7 +855,9 @@ void AHomeGenerator::StairsPositioning(FLevelOrganisation &InitialOrganisation)
 											FVectorGrid(LevelGrid.GetSizeX() - RotatedSize.X, RotatedSize.Y  + Space),
 											FVectorGrid(RotatedSize.X, 0),
 											0,
-											true
+											true,
+											EGenerationAxe::Y_UP | EGenerationAxe::X_DOWN,
+											EGenerationAxe::Y_UP
 									));
 								else
 									InitialOrganisation.SetUnknownBlock(
@@ -805,7 +866,9 @@ void AHomeGenerator::StairsPositioning(FLevelOrganisation &InitialOrganisation)
 											FVectorGrid(LevelGrid.GetSizeX() - RotatedSize.X, RotatedSize.Y  + Space),
 											FVectorGrid(0, 0),
 											0,
-											true
+											true,
+											EGenerationAxe::Y_UP | EGenerationAxe::X_UP,
+											EGenerationAxe::Y_UP
 									));
 							}
 						}
@@ -836,6 +899,7 @@ void AHomeGenerator::DivideSurface(const int Level, FLevelOrganisation &LevelOrg
 
 	//BSP's storage initialisation
 	FLevelDivisionData LevelDivisionData(BuildingConstraints.BuildingSize.Area(), LevelOrganisation.InitialHallArea());
+	TArray<FUnknownBlock *> FinalBlocks;
 	
 	TDoubleLinkedList<FUnknownBlock> ToDivide;
 	for (uint8 i = 0; i < FLevelOrganisation::BlockPositionsSize; ++i) 
@@ -872,6 +936,7 @@ void AHomeGenerator::DivideSurface(const int Level, FLevelOrganisation &LevelOrg
 			case FUnknownBlock::DivideMethod::NO_DIVIDE:
 				RoomBlocks[Level].Push(FRoomBlock());
 				ExHead->GetValue().TransformToRoom(RoomBlocks[Level].Last());
+				FinalBlocks.Push(&ExHead->GetValue());
 				break;
 
 			//Divides the block and places generated blocks at the list's end
@@ -896,10 +961,13 @@ void AHomeGenerator::DivideSurface(const int Level, FLevelOrganisation &LevelOrg
 			//Trouble in structure : exit.
 			case FUnknownBlock::DivideMethod::ERROR:
 			default:
-				assert(false);
+				check(false);
 				return;
 		}
 	}
+
+	for(auto *FinalBlock : FinalBlocks)
+		FinalBlock->ConnectDoors(SelectedDoor);
 }
 
 void AHomeGenerator::ComputeWallEffect(TArray<FLevelOrganisation>& LevelsOrganisation)
@@ -1077,20 +1145,6 @@ void AHomeGenerator::AllocateSurface()
 	}
 }
 
-template <typename T>
-void AHomeGenerator::ShuffleArray(TArray<T>& InArray)
-{
-	if (InArray.Num() > 0)
-	{
-		for (int32 i = 0; i < InArray.Num(); ++i)
-		{
-			int32 Index = FMath::RandRange(i, InArray.Num() - 1);
-			if (i != Index)
-				InArray.Swap(i, Index);
-		}
-	}
-}
-
 void AHomeGenerator::GenerateRoom(const FName& RoomType, const FRoomBlock& RoomBlock)
 {
 	FRoomGrid RoomGrid(RoomBlock.Size);
@@ -1124,7 +1178,7 @@ void AHomeGenerator::GenerateRoomDoors(const FName& RoomType, const FRoomBlock& 
 					
 					case EGenerationAxe::Y_UP: PositionMax.Y = PositionMin.Y = RoomBlock.Size.Y; break;
 					case EGenerationAxe::Y_DOWN: PositionMax.Y = PositionMin.Y = 0; break;
-					default : assert(false);
+					default : check(false);
 				}
 
 				DoorBlock->SaveLocalPosition(FVectorGrid::Random(PositionMin, PositionMax), RoomBlock);
@@ -1132,7 +1186,11 @@ void AHomeGenerator::GenerateRoomDoors(const FName& RoomType, const FRoomBlock& 
 
 			//Place the door
 			PlaceMeshInWorld(DoorBlock->GetMeshAsset(), DoorBlock->GenerateLocalFurnitureRect(RoomBlock), RoomBlock.GenerateRoomOffset(BuildingConstraints));
+			DoorBlock->MarkAsPlaced();
 		}
+
+		//Marks the grid, for the future furniture placement
+		RoomGrid.MarkDoorAtPosition(DoorBlock->GenerateLocalFurnitureRect(RoomBlock));
 	}
 }
 

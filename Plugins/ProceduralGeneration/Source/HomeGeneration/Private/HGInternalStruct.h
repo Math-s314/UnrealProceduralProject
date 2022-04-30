@@ -187,6 +187,10 @@ struct FDoorBlock
 
 	//Returns the mesh of this door
 	UFurnitureMeshAsset *GetMeshAsset() const;
+
+	//Returns the opposite side of the given axis (often needed there)
+	static EGenerationAxe GetOppositeAxe(EGenerationAxe A);
+	
 protected:
 	//Linked rooms
 	const FRoomBlock * const ParentMain;
@@ -247,6 +251,36 @@ struct FLevelDivisionData
 	//Nothing else for instance...
 };
 
+struct FAdjacencyMarker
+{
+	//Creates a connection : update corresponding array of each block
+	FAdjacencyMarker() = delete;
+	FAdjacencyMarker(FUnknownBlock *Block1, FUnknownBlock *Block2, bool DivideAlongX = true);
+
+	//Updates a connection when a block is divided by creating new connections.
+	//Deletes this connection (even if there is no update)
+	void UpdateAccordingDivision(FUnknownBlock *InitialBlock, FUnknownBlock *LowestChild, FUnknownBlock *HighestChild, bool DivideAlongX = true);
+
+	bool IsAlongBlockSide(const FUnknownBlock *Block, EGenerationAxe Side) const;
+
+	//Returns the length of the common side of the two blocks
+	int GetAdjacencyRange() const;
+
+	//Gives the other block linked to the connection
+	FUnknownBlock *GetOppositeBlock(FUnknownBlock *Block) const;
+
+protected:
+	bool AreBlockStillAdjacent(const FUnknownBlock *Block1, const FUnknownBlock *Block2) const;
+	
+	//Connected blocks
+	FUnknownBlock *MainBlock; // Has the lowest position
+	FUnknownBlock *SecondBlock;
+
+	//Side of the main block on which the connection is.
+	//Should always be an UP side.
+	const EGenerationAxe MainSide;
+};
+
 /**
  * Represents a hall : a space between rooms with special decoration
  * Real sizes does not include wall (just a space), offsets starts at the interior of the block (inside the wall)
@@ -273,7 +307,7 @@ struct FHallBlock : FBasicBlock
 struct FUnknownBlock : FBasicBlock
 {
 	FUnknownBlock() = default;
-	FUnknownBlock(const FVectorGrid &_Size, const FVectorGrid &_GlobalPosition, int _Level, bool _AlongX);
+	FUnknownBlock(const FVectorGrid &_Size, const FVectorGrid &_GlobalPosition, int _Level, bool _AlongX, uint8 _AdjacentHalls, EGenerationAxe _DoorSide);
 
 	enum class DivideMethod : uint8
 	{
@@ -303,6 +337,11 @@ struct FUnknownBlock : FBasicBlock
 	//Once this block is stopped by the system, it might be transformed to a room
 	void TransformToRoom(FRoomBlock &CreatedRoom);
 
+	//Creates the door connection between the linked room and another.
+	//Must only be called in a "final" block
+	//Must be called once all the "final" blocks have been transformed into rooms.
+	void ConnectDoors(UFurnitureMeshAsset *DoorAsset);
+
 	///
 	///Calculation part
 	///
@@ -325,15 +364,27 @@ protected:
 	//Used to ensure that the user of the class call the right method (error = no decision)
 	mutable DivideMethod DivideDecision = DivideMethod::ERROR;
 
-	//Linked blocks
+	///	
+	///Linked blocks
+	///
+
+	//BSP Graph
 	FUnknownBlock *Parent = nullptr;
 	FUnknownBlock *Child1 = nullptr;
 	FUnknownBlock *Child2 = nullptr;
+
+	//Adjacency Graph
+	TArray<FAdjacencyMarker *> AdjacencyConnections;
+	uint8 AdjacentHalls = 0;
+	EGenerationAxe DoorSide;
+	
+	//Others
 	FHallBlock *HallBlock = nullptr;
-	FRoomBlock *Room = nullptr; //Only for last blocks
+	FRoomBlock *Room = nullptr; //Only for "final" blocks
 	//ENH : Maybe add an union
 
 	friend FLevelOrganisation;
+	friend FAdjacencyMarker;
 };
 
 struct FLevelOrganisation
@@ -368,7 +419,6 @@ struct FLevelOrganisation
 
 	//Returns the sum of the area of all initial halls (except stairs)
 	int InitialHallArea() const;
-
 	
 	///
 	///"Real" calculations

@@ -2,7 +2,6 @@
 
 #include "HGInternalStruct.h"
 #include "HomeGenerator.h"
-#include <assert.h>
 
 #define CONSTRUCT_GRID(X,Y) check(X > 0 && Y > 0) Grid.SetNum(X); for (int i = 0; i < X; ++i) { Grid[i].SetNum(X); }
 
@@ -288,7 +287,7 @@ void FRoomGrid::RotateDependencyData(const FFurnitureRect& InParentPosition, con
 				case EGenerationAxe::X_DOWN: RotatedDependency.Axe = EGenerationAxe::Y_DOWN; break;
 				case EGenerationAxe::Y_UP: RotatedDependency.Axe = EGenerationAxe::X_DOWN; break;
 				case EGenerationAxe::Y_DOWN: RotatedDependency.Axe = EGenerationAxe::X_UP; break;
-				default : assert(false);
+				default : check(false);
 			}
 			break;
 			
@@ -301,7 +300,7 @@ void FRoomGrid::RotateDependencyData(const FFurnitureRect& InParentPosition, con
 				case EGenerationAxe::X_DOWN: RotatedDependency.Axe = EGenerationAxe::X_UP; break;
 				case EGenerationAxe::Y_UP: RotatedDependency.Axe = EGenerationAxe::Y_DOWN; break;
 				case EGenerationAxe::Y_DOWN: RotatedDependency.Axe = EGenerationAxe::Y_UP; break;
-				default : assert(false);
+				default : check(false);
 			}
 			break;
 		
@@ -315,7 +314,7 @@ void FRoomGrid::RotateDependencyData(const FFurnitureRect& InParentPosition, con
 				case EGenerationAxe::X_DOWN: RotatedDependency.Axe = EGenerationAxe::Y_UP; break;
 				case EGenerationAxe::Y_UP: RotatedDependency.Axe = EGenerationAxe::X_UP; break;
 				case EGenerationAxe::Y_DOWN: RotatedDependency.Axe = EGenerationAxe::X_DOWN; break;
-				default: assert(false);
+				default: check(false);
 			}
 			break;
 	}
@@ -559,17 +558,7 @@ EGenerationAxe FDoorBlock::RoomWallAxe(const FRoomBlock& Parent) const
 		return EGenerationAxe::X_UP;
 
 	if(&Parent == ParentMain)
-	{
-		switch (OpeningSide)
-		{
-            case EGenerationAxe::X_UP: return EGenerationAxe::X_DOWN;
-            case EGenerationAxe::X_DOWN: return EGenerationAxe::X_UP;
-            case EGenerationAxe::Y_UP: return EGenerationAxe::Y_DOWN;
-            case EGenerationAxe::Y_DOWN: return EGenerationAxe::Y_UP;
-            default: return EGenerationAxe::X_UP;
-		}
-	}
-	
+		return GetOppositeAxe(OpeningSide);
 	return OpeningSide;
 }
 
@@ -584,6 +573,18 @@ const FRoomBlock* FDoorBlock::ObtainOppositeParent(const FRoomBlock& Parent) con
 UFurnitureMeshAsset* FDoorBlock::GetMeshAsset() const
 {
 	return DoorAsset;
+}
+
+EGenerationAxe FDoorBlock::GetOppositeAxe(EGenerationAxe A)
+{
+	switch (A)
+	{
+		case EGenerationAxe::X_UP: return EGenerationAxe::X_DOWN;
+		case EGenerationAxe::X_DOWN: return EGenerationAxe::X_UP;
+		case EGenerationAxe::Y_UP: return EGenerationAxe::Y_DOWN;
+		case EGenerationAxe::Y_DOWN: return EGenerationAxe::Y_UP;
+		default: return EGenerationAxe::X_UP;
+	}
 }
 
 FRoomBlock::FRoomBlock(const FVectorGrid& _Size, const FVectorGrid& _GlobalPosition, int _Level)
@@ -613,17 +614,106 @@ float FLevelDivisionData::GetFutureHallRatio(int HallArea) const
 	return (static_cast<float>(HallTotalArea) + static_cast<float>(HallArea)) / static_cast<float>(LevelTotalArea);
 }
 
+FAdjacencyMarker::FAdjacencyMarker(FUnknownBlock* Block1, FUnknownBlock* Block2, bool DivideAlongX)
+	: MainSide(DivideAlongX ? EGenerationAxe::X_UP : EGenerationAxe::Y_UP)
+{
+	//Setups the structure
+	if(DivideAlongX)
+		MainBlock =  Block1->GlobalPosition.X < Block2->GlobalPosition.X ? Block1 : Block2;
+	else
+		MainBlock =  Block1->GlobalPosition.Y < Block2->GlobalPosition.Y ? Block1 : Block2;
+	SecondBlock = MainBlock == Block1 ? Block2 : Block1;
+
+	//Updates corresponding blocks
+	MainBlock->AdjacencyConnections.Push(this);
+	SecondBlock->AdjacencyConnections.Push(this);
+}
+
+void FAdjacencyMarker::UpdateAccordingDivision(FUnknownBlock* InitialBlock, FUnknownBlock* LowestChild, FUnknownBlock* HighestChild, bool DivideAlongX)
+{
+	check(InitialBlock == MainBlock || InitialBlock == SecondBlock);
+	check(LowestChild->Parent == InitialBlock && HighestChild->Parent == InitialBlock);
+	
+	const bool IsMainBlock = InitialBlock == MainBlock;
+	FUnknownBlock *const OtherBlock = IsMainBlock ? SecondBlock : MainBlock;
+	if(DivideAlongX && MainSide == EGenerationAxe::Y_UP || !DivideAlongX && MainSide == EGenerationAxe::X_UP)
+	{	
+		if(AreBlockStillAdjacent(OtherBlock, LowestChild))
+			new FAdjacencyMarker(OtherBlock, LowestChild, MainSide == EGenerationAxe::X_UP);
+
+		if(AreBlockStillAdjacent(OtherBlock, HighestChild))
+			new FAdjacencyMarker(OtherBlock, HighestChild, MainSide == EGenerationAxe::X_UP);
+	}
+	else
+	{
+		if(IsMainBlock)
+			new FAdjacencyMarker(OtherBlock, HighestChild, MainSide == EGenerationAxe::X_UP);
+		else
+			new FAdjacencyMarker(OtherBlock, LowestChild, MainSide == EGenerationAxe::X_UP);
+	}
+
+	//We assume at least child is adjacent to OtherBlock
+	delete this;
+}
+
+bool FAdjacencyMarker::IsAlongBlockSide(const FUnknownBlock* Block, EGenerationAxe Side) const
+{
+	const bool IsMainBlock = Block == MainBlock;
+
+	if(MainSide == EGenerationAxe::X_UP)
+		return (IsMainBlock && Side == EGenerationAxe::X_UP) || (!IsMainBlock && Side == EGenerationAxe::X_DOWN);
+	
+	return (IsMainBlock && Side == EGenerationAxe::Y_UP) || (!IsMainBlock && Side == EGenerationAxe::Y_DOWN);
+}
+
+int FAdjacencyMarker::GetAdjacencyRange() const
+{
+	if(MainSide == EGenerationAxe::X_UP)
+	{
+		const int Distance = SecondBlock->GlobalPosition.X - MainBlock->GlobalPosition.X;
+		const FUnknownBlock * const LowestBlock =  Distance > 0 ? MainBlock : SecondBlock;
+		return LowestBlock->Size.X - FMath::Abs(Distance);
+	}
+	else
+	{
+		const int Distance = SecondBlock->GlobalPosition.Y - MainBlock->GlobalPosition.Y;
+		const FUnknownBlock * const LowestBlock =  Distance > 0 ? MainBlock : SecondBlock;
+		return LowestBlock->Size.Y - FMath::Abs(Distance);
+	}
+}
+
+FUnknownBlock* FAdjacencyMarker::GetOppositeBlock(FUnknownBlock* Block) const
+{
+	return Block == MainBlock ? SecondBlock : MainBlock;
+}
+
+bool FAdjacencyMarker::AreBlockStillAdjacent(const FUnknownBlock* Block1, const FUnknownBlock* Block2) const
+{
+	if(MainSide == EGenerationAxe::X_UP)
+	{
+		const int Distance = Block2->GlobalPosition.X - Block1->GlobalPosition.X;
+		const FUnknownBlock * const LowestBlock =  Distance > 0 ? Block1 : Block2;
+		return LowestBlock->Size.X > FMath::Abs(Distance);
+	}
+	else
+	{
+		const int Distance = Block2->GlobalPosition.Y - Block1->GlobalPosition.Y;
+		const FUnknownBlock * const LowestBlock =  Distance > 0 ? Block1 : Block2;
+		return LowestBlock->Size.Y > FMath::Abs(Distance);
+	}
+}
+
 FHallBlock::FHallBlock(const FVectorGrid& _Size, const FVectorGrid& _GlobalPosition, int _Level)
 	: FBasicBlock(_Size, _GlobalPosition, _Level) {}
 
-FUnknownBlock::FUnknownBlock(const FVectorGrid& _Size, const FVectorGrid& _GlobalPosition, int _Level, bool _AlongX)
-	: FBasicBlock(_Size, _GlobalPosition, _Level), DivideAlongX(_AlongX) {}
+FUnknownBlock::FUnknownBlock(const FVectorGrid& _Size, const FVectorGrid& _GlobalPosition, int _Level, bool _AlongX, uint8 _AdjacentHalls, EGenerationAxe _DoorSide)
+	: FBasicBlock(_Size, _GlobalPosition, _Level), DivideAlongX(_AlongX), AdjacentHalls(_AdjacentHalls), DoorSide(_DoorSide) {}
 
 FUnknownBlock::DivideMethod FUnknownBlock::ShouldDivide(const FRoomsDivisionConstraints& DivisionCst, FLevelDivisionData& DivisionData) const
 {
 	//Basic checks
-	assert(GlobalPosition.X >= 0 && GlobalPosition.Y >= 0);
-	assert(Size.X > DivisionCst.ABSMinimalSide && Size.Y > DivisionCst.ABSMinimalSide);
+	check(GlobalPosition.X >= 0 && GlobalPosition.Y >= 0);
+	check(Size.X > DivisionCst.ABSMinimalSide && Size.Y > DivisionCst.ABSMinimalSide);
 
 	if(DivideDecision != DivideMethod::ERROR)
 		return DivideDecision;
@@ -704,11 +794,15 @@ bool FUnknownBlock::BlockSplit(const FRoomsDivisionConstraints& DivisionCst, FUn
 		FirstResultedBlock.DivideAlongX = false;
 		FirstResultedBlock.Size = FVectorGrid(HallAxis, Size.Y);
 		FirstResultedBlock.GlobalPosition = GlobalPosition;
-
+		FirstResultedBlock.AdjacentHalls = AdjacentHalls | static_cast<uint8>(EGenerationAxe::X_UP);
+		FirstResultedBlock.DoorSide = EGenerationAxe::X_UP;
+		
 		//Setup second block (highest X location)
 		SecondResultedBlock.DivideAlongX = false;
 		SecondResultedBlock.Size = FVectorGrid(Size.X - (HallAxis + DivisionCst.HallWidth), Size.Y);
 		SecondResultedBlock.GlobalPosition = GlobalPosition + FVectorGrid(HallAxis + DivisionCst.HallWidth, 0);
+		SecondResultedBlock.AdjacentHalls = AdjacentHalls | static_cast<uint8>(EGenerationAxe::X_DOWN);
+		SecondResultedBlock.DoorSide = EGenerationAxe::X_DOWN;
 	}
 	else
 	{
@@ -722,11 +816,15 @@ bool FUnknownBlock::BlockSplit(const FRoomsDivisionConstraints& DivisionCst, FUn
 		FirstResultedBlock.DivideAlongX = true;
 		FirstResultedBlock.Size = FVectorGrid(Size.X, HallAxis);
 		FirstResultedBlock.GlobalPosition = GlobalPosition;
+		FirstResultedBlock.AdjacentHalls = AdjacentHalls | static_cast<uint8>(EGenerationAxe::Y_UP);
+		FirstResultedBlock.DoorSide = EGenerationAxe::Y_UP;
 
 		//Setup second block (highest Y location)
 		SecondResultedBlock.DivideAlongX = true;
 		SecondResultedBlock.Size = FVectorGrid(Size.X, Size.Y - (HallAxis + DivisionCst.HallWidth));
 		SecondResultedBlock.GlobalPosition = GlobalPosition + FVectorGrid(0, HallAxis + DivisionCst.HallWidth);
+		SecondResultedBlock.AdjacentHalls = AdjacentHalls | static_cast<uint8>(EGenerationAxe::Y_DOWN);
+		SecondResultedBlock.DoorSide = EGenerationAxe::Y_DOWN;
 	}
 
 	//Redundant affectations
@@ -750,6 +848,7 @@ bool FUnknownBlock::BlockDivision(const FRoomsDivisionConstraints& DivisionCst, 
 		return false;
 
 	//Make split
+	const bool IsRoomSideDown = DoorSide == EGenerationAxe::X_DOWN || DoorSide == EGenerationAxe::Y_DOWN;
 	if(DivideAlongX)
 	{
 		const int WallAxis = FMath::RandRange(DivisionCst.ABSMinimalSide, Size.X - DivisionCst.ABSMinimalSide);
@@ -758,11 +857,15 @@ bool FUnknownBlock::BlockDivision(const FRoomsDivisionConstraints& DivisionCst, 
 		FirstResultedBlock.DivideAlongX	= false;
 		FirstResultedBlock.Size	= FVectorGrid(WallAxis, Size.Y);
 		FirstResultedBlock.GlobalPosition = GlobalPosition;
+		FirstResultedBlock.AdjacentHalls = AdjacentHalls & ~static_cast<uint8>(EGenerationAxe::X_UP);
+		FirstResultedBlock.DoorSide = IsRoomSideDown ? DoorSide : EGenerationAxe::X_UP;
 
 		//Setup second block (highest X location)
 		SecondResultedBlock.DivideAlongX = false;
 		SecondResultedBlock.Size = FVectorGrid(Size.X - WallAxis, Size.Y);
 		SecondResultedBlock.GlobalPosition = GlobalPosition + FVectorGrid(WallAxis, 0);
+		SecondResultedBlock.AdjacentHalls = AdjacentHalls & ~static_cast<uint8>(EGenerationAxe::X_DOWN);
+		SecondResultedBlock.DoorSide = IsRoomSideDown ?  EGenerationAxe::X_DOWN : DoorSide;
 	}
 	else
 	{
@@ -772,11 +875,15 @@ bool FUnknownBlock::BlockDivision(const FRoomsDivisionConstraints& DivisionCst, 
 		FirstResultedBlock.DivideAlongX = true;
 		FirstResultedBlock.Size = FVectorGrid(Size.X, WallAxis);
 		FirstResultedBlock.GlobalPosition = GlobalPosition;
+		FirstResultedBlock.AdjacentHalls = AdjacentHalls & ~static_cast<uint8>(EGenerationAxe::Y_UP);
+		FirstResultedBlock.DoorSide = IsRoomSideDown ? DoorSide : EGenerationAxe::Y_UP;
 
 		//Setup the returned block (highest Y location)
 		SecondResultedBlock.DivideAlongX = true;
 		SecondResultedBlock.Size = FVectorGrid(Size.X, Size.Y - WallAxis);
 		SecondResultedBlock.GlobalPosition = GlobalPosition + FVectorGrid(0, WallAxis);
+		SecondResultedBlock.AdjacentHalls = AdjacentHalls & ~static_cast<uint8>(EGenerationAxe::Y_DOWN);
+		SecondResultedBlock.DoorSide = IsRoomSideDown ?  EGenerationAxe::Y_DOWN : DoorSide;
 	}
 
 	//Redundant affectations
@@ -789,16 +896,68 @@ bool FUnknownBlock::BlockDivision(const FRoomsDivisionConstraints& DivisionCst, 
 	Child2 = &SecondResultedBlock;
 	FirstResultedBlock.Parent = SecondResultedBlock.Parent = this;
 
+	//Adjacency update
+	for (auto *Connection : AdjacencyConnections)
+		Connection->UpdateAccordingDivision(this, Child1, Child2, DivideAlongX);
+	new FAdjacencyMarker(Child1, Child2, DivideAlongX);
+	AdjacencyConnections.Empty();
+
 	return true;
 }
 
 void FUnknownBlock::TransformToRoom(FRoomBlock& CreatedRoom)
 {
+	//Basic setup
 	CreatedRoom.RoomType = "";
 	CreatedRoom.Level = Level;
 	CreatedRoom.Size = Size;
 	CreatedRoom.GlobalPosition = GlobalPosition;
-	Room = &CreatedRoom;
+	Room = &CreatedRoom;	
+
+	//Door setup is done later
+}
+
+void FUnknownBlock::ConnectDoors(UFurnitureMeshAsset* DoorAsset)
+{
+	if(AdjacentHalls)
+	{
+		TArray<EGenerationAxe> Sides = {EGenerationAxe::X_UP, EGenerationAxe::X_DOWN, EGenerationAxe::Y_UP, EGenerationAxe::Y_DOWN};
+		AHomeGenerator::ShuffleArray(Sides);
+
+		for(auto Side : Sides)
+			if(AdjacentHalls & static_cast<uint8>(Side))
+			{
+				Room->ConnectedDoors.Push(new FDoorBlock(
+					Room,
+					nullptr,
+					FDoorBlock::GetOppositeAxe(Side),
+					DoorAsset
+				));
+				break;
+			}
+	}
+	else
+	{
+		TArray<FAdjacencyMarker *> PossibleConnections;
+		for(auto *Connection : AdjacencyConnections)
+		{
+			if(!Connection->IsAlongBlockSide(this, DoorSide)) continue;
+			if(Connection->GetAdjacencyRange() < DoorAsset->GridSize.Y) continue;
+			PossibleConnections.Push(Connection);
+		}
+		//ENH : Should maybe select this with biggest range
+		check(PossibleConnections.Num() > 0);
+		const FAdjacencyMarker * const SelectedMarker = PossibleConnections[FMath::RandRange(0, PossibleConnections.Num() - 1)];
+
+		Room->ConnectedDoors.Push(new FDoorBlock(
+			Room,
+			SelectedMarker->GetOppositeBlock(this)->Room,
+			FDoorBlock::GetOppositeAxe(DoorSide),
+			DoorAsset
+		));
+
+		SelectedMarker->GetOppositeBlock(this)->Room->ConnectedDoors.Push(Room->ConnectedDoors.Last());
+	}
 }
 
 void FUnknownBlock::ComputeRealSizeRecursive(const FBuildingConstraint &BuildingCst, const FRoomsDivisionConstraints &RoomDivisionCst)
@@ -857,7 +1016,7 @@ void FUnknownBlock::ComputeRealSizeRecursive(const FBuildingConstraint &Building
 
 void FUnknownBlock::ComputeRealOffsetRecursive(const FBuildingConstraint& BuildingCst, const FRoomsDivisionConstraints& RoomDivisionCst, const bool IsHighestAxe) const
 {
-	assert(DivideDecision != DivideMethod::ERROR);
+	check(DivideDecision != DivideMethod::ERROR);
 	if(Child1 == nullptr && Child2 == nullptr || DivideDecision == DivideMethod::NO_DIVIDE) //End case
 	{
 		Room->RealOffset = RealOffset;

@@ -293,22 +293,6 @@ protected:
 	void ComputeSides();
 
 	//Generated data is stored in the RoomsDivisionConstraintStruct or in BuildingConstraintStruct
-
-	///______________________
-	///Array helper
-	///
-
-	//Generate the list of the integers in the range : [Start; Stop[
-	//Acts like python function : range(start, stop)
-	static void GenerateRangeArray(TArray<int32> &InArray, int32 Start, int32 Stop);
-
-	//Generate the list of the integers in the range : [0; Stop[
-	//Acts like python function : range(stop)
-	static void GenerateRangeArray(TArray<int32> &InArray, int32 Stop);
-
-	//Shuffle the element of a given array
-	template<typename T>
-	static void ShuffleArray(TArray<T> &InArray);
 	
 	///______________________
 	///Building Step
@@ -380,4 +364,37 @@ protected:
 public:
 	// Called every frame
 	virtual void Tick(float DeltaTime) override;
+
+	///______________________
+	///Array helper
+	///
+
+	//Generate the list of the integers in the range : [Start; Stop[
+	//Acts like python function : range(start, stop)
+	static void GenerateRangeArray(TArray<int32> &InArray, int32 Start, int32 Stop);
+
+	//Generate the list of the integers in the range : [0; Stop[
+	//Acts like python function : range(stop)
+	static void GenerateRangeArray(TArray<int32> &InArray, int32 Stop);
+
+	//Shuffle the element of a given array
+	template<typename T>
+	static void ShuffleArray(TArray<T> &InArray);
 };
+
+/**
+ * Inline definitions of template functions
+ */
+template <typename T>
+void AHomeGenerator::ShuffleArray(TArray<T>& InArray)
+{
+	if (InArray.Num() > 0)
+	{
+		for (int32 i = 0; i < InArray.Num(); ++i)
+		{
+			int32 Index = FMath::RandRange(i, InArray.Num() - 1);
+			if (i != Index)
+				InArray.Swap(i, Index);
+		}
+	}
+}

@@ -4,6 +4,21 @@
 #include "FurnitureMeshAsset.h"
 #include "HomeGenerator.h"
 
+uint8 operator|(EGenerationAxe A, EGenerationAxe B)
+{
+	return static_cast<uint8>(A) | static_cast<uint8>(B);
+}
+
+uint8 operator|(EGenerationAxe A, uint8 B)
+{
+	return static_cast<uint8>(A) | B;
+}
+
+uint8 operator|(uint8 A, EGenerationAxe B)
+{
+	return B | A;
+}
+
 bool FWallInteractionStruct::GetFirstAttractedWall(EGenerationAxe& First) const
 {
 	if(XUp == EWallAxeInteraction::ATTRACT)

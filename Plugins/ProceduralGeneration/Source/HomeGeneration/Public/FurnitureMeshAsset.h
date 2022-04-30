@@ -19,13 +19,17 @@ UENUM(BlueprintType)
 enum class EGenerationAxe : uint8
 {
 	//Shouldn't be used, only exists for compilation purposes
-	NONE = 0	UMETA(DisplayName="None"),
+	NONE   = 0	UMETA(DisplayName="None"),
 	
 	X_UP   = 1	UMETA(DisplayName="Axe X+"),//0001
 	X_DOWN = 2	UMETA(DisplayName="Axe X-"),//0010
 	Y_UP   = 4	UMETA(DisplayName="Axe Y+"),//0100
 	Y_DOWN = 8	UMETA(DisplayName="Axe Y-") //1000
 };
+
+uint8 operator|(EGenerationAxe A, EGenerationAxe B);
+uint8 operator|(EGenerationAxe A, uint8 B);
+uint8 operator|(uint8 A, EGenerationAxe B);
 
 //Basic furniture's constraints
 
